@@ -1,5 +1,26 @@
 # PPT/PDF转复习提纲和考试例题智能系统设计文档
 
+## 0. 当前实现状态：MVP-7 内部Beta产品闭环
+
+截至当前实现，项目已经从纯后端能力原型推进到内部Beta产品闭环：
+
+- **前端**：`frontend/` 使用 Vite + React，已接入真实 API，支持用户切换、PPT/PDF上传、文档列表、任务状态、提纲版本、题目版本、反馈、导出和 review task 列表。
+- **后端 API**：`src/api/` 提供文档、任务、版本、提纲、题目、导出、反馈、review task 和健康检查接口。
+- **数据库**：`src/db/models.py` 覆盖 documents、processing_jobs、parsed_sections、knowledge_points、outlines、questions、document_artifacts、content_versions、export_jobs、feedback、review_tasks、audit_events。
+- **存储**：`src/storage/backend.py` 定义 `StorageBackend`，当前实现以本地文件系统作为内部Beta对象存储，所有 API/worker 通过 storage URI 访问文件。
+- **任务处理**：`src/workers/tasks.py` 支持文档处理任务生成 normalized artifact、outline version 和 question_set version，并支持导出任务产物写入存储。
+- **权限边界**：内部Beta通过请求头 `x-user-id` 建立轻量用户上下文，文档、任务、版本、反馈、review task 和导出围绕 owner 隔离。
+- **审计**：关键动作会写入 `audit_events`，包括 document upload、job retry、export create、feedback create、review decision；审计 metadata 过滤 raw content、authorization、token、secret、password 等敏感内容。
+- **验证**：后端测试覆盖 owner 隔离、审计过滤、上传/处理/版本/导出链路；前端通过 TypeScript + Vite build 验证 API 驱动界面。
+
+### 0.1 内部Beta边界和非目标
+
+- `x-user-id` 是内部Beta测试身份，不是正式认证；正式产品仍需要真实 auth、session、RBAC/ABAC 和租户模型。
+- 当前队列为进程内/测试友好实现，生产化 Redis/Celery/RQ 不在 MVP-7 范围内。
+- 当前对象存储为本地文件系统，生产 S3/MinIO、生命周期策略和多副本容灾不在 MVP-7 范围内。
+- 当前导出任务验证 Markdown/JSON/LaTeX/PDF 的内容写入路径，正式 PDF 渲染、模板系统和下载签名 URL 仍需后续阶段实现。
+- 自进化系统、Graph RAG/Agentic RAG 自动路由实验仍保留为后续能力，不作为内部Beta产品闭环上线前置。
+
 ## 1. 项目概述
 
 ### 1.1 项目目标
