@@ -1,0 +1,542 @@
+:root {
+  color: #18212f;
+  background: #f5f7fa;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: #f5f7fa;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+.app-shell {
+  width: min(1440px, 100%);
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.workspace-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #d9e0ea;
+}
+
+.eyebrow,
+.workspace-summary,
+.panel-header p,
+.document-meta,
+.stage-detail,
+.empty-state span {
+  color: #5b6678;
+}
+
+.eyebrow {
+  margin: 0 0 6px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+h1,
+h2,
+h3,
+p {
+  overflow-wrap: anywhere;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(1.7rem, 3vw, 2.4rem);
+  line-height: 1.08;
+}
+
+h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+h3 {
+  margin: 0;
+  font-size: 0.96rem;
+  line-height: 1.35;
+}
+
+.workspace-summary,
+.panel-header p {
+  margin: 8px 0 0;
+  line-height: 1.5;
+}
+
+.workspace-metrics {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.workspace-metrics span {
+  min-height: 36px;
+  padding: 8px 11px;
+  border: 1px solid #d8dee8;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #465366;
+  white-space: nowrap;
+}
+
+.workspace-grid {
+  display: grid;
+  grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
+  gap: 18px;
+  padding-top: 18px;
+  align-items: start;
+}
+
+.documents-panel,
+.job-panel,
+.outline-panel,
+.questions-panel {
+  border: 1px solid #d9e0ea;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgb(20 32 48 / 5%);
+}
+
+.documents-panel {
+  padding: 16px;
+  position: sticky;
+  top: 18px;
+}
+
+.job-panel,
+.outline-panel,
+.questions-panel {
+  padding: 18px;
+}
+
+.detail-stack {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+
+.study-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.panel-header.compact {
+  padding-bottom: 12px;
+  border-bottom: 1px solid #edf1f6;
+}
+
+.primary-action,
+.upload-controls button {
+  min-height: 36px;
+  border: 1px solid #174c8f;
+  border-radius: 6px;
+  background: #1d5fa8;
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.primary-action {
+  padding: 0 14px;
+  flex: 0 0 auto;
+}
+
+.upload-strip {
+  margin: 16px 0;
+  padding: 12px;
+  border: 1px dashed #b9c5d4;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.upload-strip label {
+  display: block;
+  margin-bottom: 8px;
+  color: #344256;
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.upload-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.upload-controls input {
+  min-width: 0;
+  width: 100%;
+  padding: 7px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #344256;
+}
+
+.upload-controls button {
+  padding: 0 12px;
+}
+
+.document-list {
+  display: grid;
+  gap: 9px;
+}
+
+.document-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 12px;
+  align-items: start;
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #e1e7ef;
+  border-radius: 8px;
+  background: #ffffff;
+  color: inherit;
+  text-align: left;
+}
+
+.document-row .status-badge {
+  align-self: start;
+  justify-self: end;
+}
+
+.document-row:hover,
+.document-row.is-selected {
+  border-color: #7aa3d5;
+  background: #f4f8fd;
+}
+
+.document-row-main {
+  min-width: 0;
+}
+
+.document-title,
+.document-meta {
+  display: block;
+}
+
+.document-title {
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.document-meta {
+  margin-top: 4px;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.document-progress,
+.progress-track {
+  display: block;
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e7edf5;
+}
+
+.document-progress {
+  grid-column: 1 / -1;
+}
+
+.document-progress span,
+.progress-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #2d6fb3;
+}
+
+.status-badge,
+.stage-status,
+.difficulty {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 800;
+  text-transform: capitalize;
+  white-space: nowrap;
+}
+
+.status-running {
+  background: #e7f1ff;
+  color: #155c9f;
+}
+
+.status-completed {
+  background: #e8f6ee;
+  color: #207245;
+}
+
+.status-failed,
+.stage-blocked {
+  background: #fdebea;
+  color: #a23b32;
+}
+
+.status-queued,
+.status-cancelled {
+  background: #edf1f6;
+  color: #465366;
+}
+
+.job-progress {
+  margin-top: 18px;
+}
+
+.progress-copy {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 8px;
+  color: #344256;
+}
+
+.stage-list {
+  display: grid;
+  gap: 10px;
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stage-item {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  padding: 12px 0;
+  border-top: 1px solid #edf1f6;
+}
+
+.stage-marker {
+  width: 10px;
+  height: 10px;
+  margin-top: 5px;
+  border-radius: 999px;
+  background: #aab6c6;
+}
+
+.stage-done .stage-marker {
+  background: #2e7d50;
+}
+
+.stage-active .stage-marker {
+  background: #2d6fb3;
+}
+
+.stage-blocked .stage-marker {
+  background: #b5483f;
+}
+
+.stage-copy {
+  min-width: 0;
+}
+
+.stage-title,
+.stage-detail {
+  display: block;
+}
+
+.stage-title {
+  font-weight: 750;
+}
+
+.stage-detail {
+  margin-top: 3px;
+  line-height: 1.45;
+}
+
+.stage-status {
+  background: #f0f4f8;
+  color: #465366;
+}
+
+.outline-content {
+  display: grid;
+  gap: 8px;
+  padding-top: 12px;
+}
+
+.outline-content p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.outline-heading {
+  padding-top: 8px;
+  color: #263548;
+  font-weight: 800;
+}
+
+.outline-heading-top {
+  padding-top: 0;
+  font-size: 1.03rem;
+}
+
+.outline-bullet {
+  padding-left: 16px;
+  color: #4d596b;
+}
+
+.outline-bullet::before {
+  content: "";
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin: 0 8px 2px -13px;
+  border-radius: 999px;
+  background: #8291a5;
+}
+
+.question-list {
+  display: grid;
+  gap: 12px;
+  padding-top: 12px;
+}
+
+.question-item {
+  padding: 14px 0;
+  border-bottom: 1px solid #edf1f6;
+}
+
+.question-item:last-child {
+  border-bottom: 0;
+}
+
+.question-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.difficulty-easy {
+  background: #e8f6ee;
+  color: #207245;
+}
+
+.difficulty-medium {
+  background: #fff4df;
+  color: #865200;
+}
+
+.difficulty-hard {
+  background: #fdebea;
+  color: #a23b32;
+}
+
+dl {
+  display: grid;
+  gap: 9px;
+  margin: 12px 0 0;
+}
+
+dt {
+  margin-bottom: 3px;
+  color: #5b6678;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+dd {
+  margin: 0;
+  color: #2f3b4d;
+  line-height: 1.45;
+}
+
+.empty-state {
+  display: grid;
+  gap: 5px;
+  margin-top: 12px;
+  padding: 16px;
+  border: 1px solid #e1e7ef;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+@media (max-width: 1100px) {
+  .workspace-grid,
+  .study-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .documents-panel {
+    position: static;
+  }
+}
+
+@media (max-width: 720px) {
+  .app-shell {
+    padding: 16px;
+  }
+
+  .workspace-header,
+  .panel-header,
+  .question-heading {
+    display: grid;
+    justify-content: stretch;
+  }
+
+  .workspace-metrics {
+    justify-content: start;
+  }
+
+  .upload-controls,
+  .stage-item {
+    grid-template-columns: 1fr;
+  }
+
+  .stage-marker {
+    display: none;
+  }
+
+  .status-badge,
+  .difficulty,
+  .stage-status {
+    justify-self: start;
+  }
+}

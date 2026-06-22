@@ -1,0 +1,30 @@
+[
+  {
+    "id": "def-001",
+    "query": "什么是导数？",
+    "category": "definition",
+    "expected_sources": ["calculus:derivative"],
+    "expected_terms": ["变化率", "函数"]
+  },
+  {
+    "id": "formula-001",
+    "query": "链式法则公式是什么？",
+    "category": "formula_lookup",
+    "expected_sources": ["calculus:chain_rule"],
+    "expected_terms": ["f(g(x))", "g'(x)"]
+  },
+  {
+    "id": "relation-001",
+    "query": "导数和梯度有什么关系？",
+    "category": "concept_relation",
+    "expected_sources": ["calculus:gradient"],
+    "expected_terms": ["多变量", "方向"]
+  },
+  {
+    "id": "synthesis-001",
+    "query": "基于导数和矩阵出一道综合题",
+    "category": "question_generation",
+    "expected_sources": ["calculus:derivative", "linear_algebra:matrix"],
+    "expected_terms": ["题目", "答案"]
+  }
+]

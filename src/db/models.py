@@ -1,0 +1,279 @@
+from datetime import datetime, timezone
+from typing import List, Optional
+
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    JSON,
+    String,
+    Text,
+    UniqueConstraint,
+)
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class Document(Base):
+    __tablename__ = "documents"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, default="demo-user", index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    storage_uri: Mapped[str] = mapped_column(String(1024), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    original_filename: Mapped[Optional[str]] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="uploaded")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+    jobs: Mapped[List["ProcessingJob"]] = relationship(
+        back_populates="document", cascade="all, delete-orphan"
+    )
+    sections: Mapped[List["ParsedSection"]] = relationship(
+        back_populates="document", cascade="all, delete-orphan"
+    )
+    knowledge_points: Mapped[List["KnowledgePointRecord"]] = relationship(
+        back_populates="document", cascade="all, delete-orphan"
+    )
+    outlines: Mapped[List["OutlineRecord"]] = relationship(
+        back_populates="document", cascade="all, delete-orphan"
+    )
+    questions: Mapped[List["QuestionRecord"]] = relationship(
+        back_populates="document", cascade="all, delete-orphan"
+    )
+    artifacts: Mapped[List["DocumentArtifactRecord"]] = relationship(
+        back_populates="document", cascade="all, delete-orphan"
+    )
+    export_jobs: Mapped[List["ExportJobRecord"]] = relationship(
+        back_populates="document", cascade="all, delete-orphan"
+    )
+
+
+class ProcessingJob(Base):
+    __tablename__ = "processing_jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued', 'running', 'completed', 'succeeded', 'failed', 'cancelled', 'canceled')",
+            name="ck_processing_jobs_status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    document_id: Mapped[str] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, default="demo-user", index=True)
+    job_type: Mapped[str] = mapped_column(String(64), nullable=False, default="process_document")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
+    progress: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+    document: Mapped[Document] = relationship(back_populates="jobs")
+
+
+class ParsedSection(Base):
+    __tablename__ = "parsed_sections"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    document_id: Mapped[str] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    level: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    order_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    document: Mapped[Document] = relationship(back_populates="sections")
+
+
+class KnowledgePointRecord(Base):
+    __tablename__ = "knowledge_points"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    document_id: Mapped[str] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    category: Mapped[Optional[str]] = mapped_column(String(100))
+    point_type: Mapped[Optional[str]] = mapped_column(String(100))
+    importance: Mapped[Optional[int]] = mapped_column(Integer)
+
+    document: Mapped[Document] = relationship(back_populates="knowledge_points")
+    questions: Mapped[List["QuestionRecord"]] = relationship(back_populates="knowledge_point")
+
+
+class OutlineRecord(Base):
+    __tablename__ = "outlines"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    document_id: Mapped[str] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    markdown: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+    document: Mapped[Document] = relationship(back_populates="outlines")
+
+
+class DocumentArtifactRecord(Base):
+    __tablename__ = "document_artifacts"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    document_id: Mapped[str] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    artifact_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    artifact_metadata: Mapped[dict] = mapped_column("metadata", JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+    document: Mapped[Document] = relationship(back_populates="artifacts")
+
+
+class ContentVersionRecord(Base):
+    __tablename__ = "content_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "target_type",
+            "target_id",
+            "version",
+            name="uq_content_versions_target_version",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    document_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    target_type: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    target_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    content_metadata: Mapped[dict] = mapped_column("metadata", JSON, nullable=False, default=dict)
+    created_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    change_summary: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class QuestionRecord(Base):
+    __tablename__ = "questions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    document_id: Mapped[str] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    stem: Mapped[str] = mapped_column(Text, nullable=False)
+    answer: Mapped[str] = mapped_column(Text, nullable=False)
+    explanation: Mapped[Optional[str]] = mapped_column(Text)
+    difficulty: Mapped[Optional[str]] = mapped_column(String(50))
+    question_type: Mapped[Optional[str]] = mapped_column(String(100))
+    knowledge_point_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("knowledge_points.id", ondelete="SET NULL"), index=True
+    )
+
+    document: Mapped[Document] = relationship(back_populates="questions")
+    knowledge_point: Mapped[Optional[KnowledgePointRecord]] = relationship(
+        back_populates="questions"
+    )
+
+
+class ExportJobRecord(Base):
+    __tablename__ = "export_jobs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    document_id: Mapped[str] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    version_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("content_versions.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    format: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
+    storage_uri: Mapped[Optional[str]] = mapped_column(String(1024))
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+    document: Mapped[Document] = relationship(back_populates="export_jobs")
+
+
+class FeedbackRecord(Base):
+    __tablename__ = "feedback"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    target_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    rating: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason: Mapped[str] = mapped_column(String(128), nullable=False)
+    comment: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+
+class ReviewTaskRecord(Base):
+    __tablename__ = "review_tasks"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    target_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="open")
+    reason: Mapped[str] = mapped_column(String(128), nullable=False)
+    assignee: Mapped[Optional[str]] = mapped_column(String(255))
+    decision: Mapped[Optional[str]] = mapped_column(String(64))
+    comment: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+
+class AuditEventRecord(Base):
+    __tablename__ = "audit_events"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    actor_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    action: Mapped[str] = mapped_column(String(100), nullable=False)
+    resource_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    resource_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    event_metadata: Mapped[dict] = mapped_column("metadata", JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )

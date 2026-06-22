@@ -1,0 +1,42 @@
+{
+  "title": "Calculus and Linear Algebra Review",
+  "metadata": {
+    "source": "fixture",
+    "course": "MVP-1 verification"
+  },
+  "sections": [
+    {
+      "level": 1,
+      "title": "Derivatives",
+      "content": "A derivative measures the instantaneous rate of change of a function. The chain rule differentiates a composite function by multiplying the outer derivative by the inner derivative.",
+      "formulas": [
+        {
+          "latex": "\\frac{d}{dx} f(g(x)) = f'(g(x))g'(x)",
+          "description": "Chain rule for differentiating composite functions.",
+          "page_number": 1
+        }
+      ],
+      "subsections": []
+    },
+    {
+      "level": 1,
+      "title": "Matrices",
+      "content": "A matrix organizes numbers into rows and columns. Matrix multiplication combines rows and columns and is defined only when the inner dimensions match.",
+      "formulas": [
+        {
+          "latex": "A_{m \\times n}B_{n \\times p}=C_{m \\times p}",
+          "description": "Matrix multiplication dimension rule.",
+          "page_number": 2
+        }
+      ],
+      "subsections": []
+    }
+  ],
+  "formulas": [
+    {
+      "latex": "\\frac{d}{dx} f(g(x)) = f'(g(x))g'(x)",
+      "description": "Chain rule connects rates of change in nested functions.",
+      "page_number": 1
+    }
+  ]
+}

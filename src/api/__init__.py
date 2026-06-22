@@ -1,0 +1,1 @@
+"""FastAPI product API package."""
