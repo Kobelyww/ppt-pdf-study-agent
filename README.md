@@ -17,6 +17,8 @@
 
 下一阶段实现计划：构建确定性、可追踪的 study-agent 工作流，在 simple RAG、Graph RAG Lite 和 Agentic RAG 之间自动路由学习查询；收集 evidence；生成带引用的复习内容；并验证结果应直接返回还是标记为人工审核。
 
+Study Agent queries now require explicit `document_ids` and use the authenticated user's processed `normalized_document` artifacts as evidence. The first production path builds a temporary in-memory index per request; persistent chunk/vector indexing remains a future scaling step.
+
 ### MVP-8 Production Readiness Foundation
 
 当前代码已进入 MVP-8 Production Readiness Foundation 阶段：

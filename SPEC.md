@@ -6,6 +6,8 @@ MVP-9 的目标是在 MVP-8 正式产品底座之上补齐可追踪的 agent 学
 
 当前实现计划见 `docs/superpowers/specs/2026-06-24-agentic-study-pipeline-design.md` 和 `docs/superpowers/plans/2026-06-24-agentic-study-pipeline.md`。MVP-9 第一阶段保持确定性、可测试、可审计；真实 LLM provider 优化、Hermes 自进化和大规模向量数据库优化仍为后续阶段。
 
+- Study Agent document evidence: `/api/study-agent/query` requires explicit `document_ids`; the default runtime loads only the authenticated user's ready documents with `normalized_document` artifacts, chunks them at query time, and returns grounded results with citations and review metadata.
+
 ## 0.1 历史状态：MVP-8 正式产品基础
 
 截至当前实现，项目已经从 MVP-7 内部Beta产品闭环推进到 MVP-8 Production Readiness Foundation。MVP-8 的目标不是继续扩大智能能力，而是先把正式产品运行底座补齐：身份、授权、数据库、队列、对象存储、健康检查、部署形态和CI。
