@@ -19,6 +19,8 @@
 
 Study Agent queries now require explicit `document_ids` and use the authenticated user's processed `normalized_document` artifacts as evidence. The first production path builds a temporary in-memory index per request; persistent chunk/vector indexing remains a future scaling step.
 
+The frontend workbench includes a Study Agent panel for one or more ready documents, grounded answer/question/note generation, citation display, confidence, and review status.
+
 ### MVP-8 Production Readiness Foundation
 
 当前代码已进入 MVP-8 Production Readiness Foundation 阶段：

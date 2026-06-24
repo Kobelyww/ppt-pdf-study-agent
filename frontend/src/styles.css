@@ -671,6 +671,201 @@ dd {
   overflow-wrap: anywhere;
 }
 
+.study-agent-panel {
+  border: 1px solid #d9e0ea;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgb(20 32 48 / 5%);
+  padding: 18px;
+}
+
+.study-agent-form {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.study-agent-form label {
+  display: grid;
+  gap: 7px;
+  color: #344256;
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.study-agent-form input,
+.study-agent-form select,
+.study-agent-form textarea {
+  min-width: 0;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #18212f;
+}
+
+.study-agent-form textarea {
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.document-checklist {
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid #e1e7ef;
+  border-radius: 8px;
+}
+
+.document-checklist legend {
+  padding: 0 6px;
+  color: #344256;
+  font-size: 0.88rem;
+  font-weight: 800;
+}
+
+.document-checklist > div {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.document-checklist label {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid #edf1f6;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.document-checklist input[type="checkbox"] {
+  width: auto;
+  min-width: 16px;
+}
+
+.document-checklist span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.agent-control-grid,
+.agent-trace {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.study-agent-result {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #edf1f6;
+}
+
+.agent-answer {
+  padding: 12px;
+  border: 1px solid #e1e7ef;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.evidence-viewer {
+  display: grid;
+  gap: 12px;
+}
+
+.agent-trace {
+  margin: 0;
+}
+
+.agent-trace div {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #e1e7ef;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.agent-reason,
+.agent-issues {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  color: #344256;
+  line-height: 1.45;
+}
+
+.agent-reason span,
+.agent-issues li {
+  color: #5b6678;
+}
+
+.agent-issues {
+  padding-left: 18px;
+}
+
+.citation-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.citation-pill {
+  display: inline-flex;
+  max-width: 100%;
+  min-height: 26px;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #edf1f6;
+  color: #344256;
+  font-size: 0.78rem;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.evidence-list {
+  display: grid;
+  gap: 10px;
+}
+
+.evidence-item {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #e1e7ef;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.evidence-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: #263548;
+}
+
+.evidence-item p,
+.evidence-item code {
+  margin: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+
+.evidence-item p {
+  color: #4d596b;
+}
+
+.evidence-item code {
+  color: #5b6678;
+  font-size: 0.78rem;
+}
+
 @media (max-width: 1100px) {
   .workspace-grid,
   .study-columns {
@@ -702,7 +897,10 @@ dd {
   .upload-controls,
   .upload-row,
   .stage-item,
-  .review-list li {
+  .review-list li,
+  .document-checklist > div,
+  .agent-control-grid,
+  .agent-trace {
     grid-template-columns: 1fr;
   }
 
