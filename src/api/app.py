@@ -15,6 +15,7 @@ from src.api.routes.exports import router as exports_router
 from src.api.routes.feedback import router as feedback_router
 from src.api.routes.jobs import router as jobs_router
 from src.api.routes.review import router as review_router
+from src.api.routes.study_agent import router as study_agent_router
 from src.config import load_product_config
 from src.db.models import Base, UserRecord
 from src.db.session import create_session_factory, get_engine
@@ -129,6 +130,7 @@ def create_app(
     session_factory: Any | None = None,
     export_service: Any | None = None,
     feedback_service: Any | None = None,
+    study_agent_orchestrator: Any | None = None,
     secret_key: str | None = None,
     allow_dev_user_header: bool | None = None,
     cors_origins: list[str] | None = None,
@@ -180,6 +182,7 @@ def create_app(
     else:
         app.state.export_service = export_service or ExportService()
     app.state.feedback_service = feedback_service or FeedbackService()
+    app.state.study_agent_orchestrator = study_agent_orchestrator
     app.state.job_queue = job_queue
     app.state.readiness_checks = readiness_checks or {}
 
@@ -200,6 +203,7 @@ def create_app(
     app.include_router(feedback_router)
     app.include_router(jobs_router, prefix="/api")
     app.include_router(review_router)
+    app.include_router(study_agent_router)
 
     @app.get("/health")
     def health() -> dict[str, object]:
