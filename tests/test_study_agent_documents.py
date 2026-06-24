@@ -10,6 +10,8 @@ from sqlalchemy.pool import StaticPool
 from src.db.models import Base, Document, DocumentArtifactRecord
 from src.services.study_agent_documents import (
     StudyAgentDocumentError,
+    StudyDocumentChunker,
+    StudyDocumentEvidence,
     StudyDocumentEvidenceSource,
 )
 
@@ -167,3 +169,52 @@ def test_evidence_source_rejects_ready_document_without_normalized_artifact():
     assert exc_info.value.status_code == 422
     assert exc_info.value.code == "document_evidence_missing"
     assert "Processed document evidence is unavailable" in exc_info.value.detail
+
+
+def test_chunker_builds_stable_chunks_with_required_metadata():
+    evidence = StudyDocumentEvidence(
+        document_id="doc-1",
+        document_title="Calculus Notes",
+        owner_id="user-1",
+        artifact_id="artifact-1",
+        artifact_type="normalized_document",
+        content="Derivatives measure instantaneous rate of change. Gradients extend derivatives.",
+        artifact_metadata={"source": "test"},
+        created_at=datetime.now(timezone.utc),
+    )
+
+    chunks = StudyDocumentChunker(max_chars=36, overlap_chars=8).chunk((evidence,))
+
+    assert len(chunks) >= 2
+    assert chunks[0]["source"] == "document:doc-1:chunk:0"
+    assert chunks[1]["source"] == "document:doc-1:chunk:1"
+    assert chunks[0]["metadata"]["owner_id"] == "user-1"
+    assert chunks[0]["metadata"]["document_id"] == "doc-1"
+    assert chunks[0]["metadata"]["document_title"] == "Calculus Notes"
+    assert chunks[0]["metadata"]["artifact_id"] == "artifact-1"
+    assert chunks[0]["metadata"]["artifact_type"] == "normalized_document"
+    assert chunks[0]["metadata"]["chunk_index"] == 0
+    assert chunks[0]["metadata"]["chunk_count"] == len(chunks)
+    assert chunks[0]["metadata"]["source_kind"] == "normalized_document"
+
+
+def test_chunker_skips_blank_artifact_content():
+    evidence = StudyDocumentEvidence(
+        document_id="doc-blank",
+        document_title="Blank",
+        owner_id="user-1",
+        artifact_id="artifact-blank",
+        artifact_type="normalized_document",
+        content="   \n\t   ",
+        artifact_metadata={},
+        created_at=datetime.now(timezone.utc),
+    )
+
+    chunks = StudyDocumentChunker(max_chars=36, overlap_chars=8).chunk((evidence,))
+
+    assert chunks == []
+
+
+def test_chunker_rejects_invalid_overlap_configuration():
+    with pytest.raises(ValueError, match="overlap_chars must be smaller than max_chars"):
+        StudyDocumentChunker(max_chars=10, overlap_chars=10)

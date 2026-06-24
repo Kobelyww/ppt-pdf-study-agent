@@ -122,3 +122,81 @@ def _dedupe_nonempty(values: Sequence[str]) -> tuple[str, ...]:
         if normalized:
             seen.setdefault(normalized, None)
     return tuple(seen)
+
+
+class StudyDocumentChunker:
+    def __init__(self, *, max_chars: int = 900, overlap_chars: int = 120) -> None:
+        if max_chars <= 0:
+            raise ValueError("max_chars must be positive")
+        if overlap_chars < 0:
+            raise ValueError("overlap_chars must not be negative")
+        if overlap_chars >= max_chars:
+            raise ValueError("overlap_chars must be smaller than max_chars")
+        self.max_chars = max_chars
+        self.overlap_chars = overlap_chars
+
+    def chunk(self, evidence: Sequence[StudyDocumentEvidence]) -> list[dict[str, Any]]:
+        chunks: list[dict[str, Any]] = []
+        for item in evidence:
+            segments = self._split_content(item.content)
+            chunk_count = len(segments)
+            for index, segment in enumerate(segments):
+                chunks.append(
+                    {
+                        "content": segment,
+                        "source": f"document:{item.document_id}:chunk:{index}",
+                        "metadata": {
+                            "owner_id": item.owner_id,
+                            "document_id": item.document_id,
+                            "document_title": item.document_title,
+                            "artifact_id": item.artifact_id,
+                            "artifact_type": item.artifact_type,
+                            "chunk_index": index,
+                            "chunk_count": chunk_count,
+                            "source_kind": "normalized_document",
+                        },
+                    }
+                )
+        return chunks
+
+    def _split_content(self, content: str) -> list[str]:
+        normalized = " ".join(str(content).split())
+        if not normalized:
+            return []
+
+        segments: list[str] = []
+        start = 0
+        text_length = len(normalized)
+        while start < text_length:
+            end = min(text_length, start + self.max_chars)
+            if end < text_length:
+                boundary = self._best_boundary(normalized, start, end)
+                if boundary > start:
+                    end = boundary
+
+            segment = normalized[start:end].strip()
+            if segment:
+                segments.append(segment)
+
+            if end >= text_length:
+                break
+
+            next_start = max(0, end - self.overlap_chars)
+            if next_start <= start:
+                next_start = end
+            start = next_start
+
+        return segments
+
+    def _best_boundary(self, text: str, start: int, end: int) -> int:
+        lower_bound = start + max(1, self.max_chars // 2)
+        candidates = [
+            text.rfind("。", start, end),
+            text.rfind(".", start, end),
+            text.rfind("\n", start, end),
+            text.rfind(" ", start, end),
+        ]
+        boundary = max(candidates)
+        if boundary >= lower_bound:
+            return boundary + 1
+        return end
