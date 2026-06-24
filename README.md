@@ -34,6 +34,8 @@
 pip install -r requirements.txt
 ```
 
+CI 使用 `requirements-ci.txt` 安装已验证的测试/运行基础依赖；`requirements.txt` 中的 provider SDK 占位项需要在接入真实供应商包名前单独确认。
+
 ### 配置环境变量
 
 ```bash
