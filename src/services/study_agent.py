@@ -8,6 +8,7 @@ from typing import Any
 from src.knowledge.knowledge_graph import KnowledgeGraph
 from src.services.agentic_rag import AgenticRAGPlanner
 from src.services.graph_rag import GraphRAGLiteRetriever
+from src.services.rag_evaluation import RAGEvalCase, RAGEvaluator
 from src.services.rag_router import RetrievalMode
 from src.services.rag_service import Chunk, RAGService
 
@@ -81,6 +82,113 @@ class StudyAgentResult:
     draft: StudyDraft
     verification: StudyVerification
     audit_metadata: dict[str, Any]
+
+
+class StudyContentGenerator:
+    def generate(self, request: StudyRequest, evidence: EvidenceBundle) -> StudyDraft:
+        if request.target == StudyTarget.QUESTION:
+            content = self._question_content(request, evidence)
+        elif request.target == StudyTarget.OUTLINE_FRAGMENT:
+            content = self._outline_content(evidence)
+        else:
+            content = self._answer_content(request, evidence)
+        return StudyDraft(
+            target=request.target,
+            content=content,
+            citations=evidence.sources,
+            used_chunk_count=len(evidence.chunks),
+            metadata={
+                "target": request.target.value,
+                "mode": evidence.mode.value,
+                "evidence_confidence": evidence.confidence,
+            },
+        )
+
+    def _answer_content(self, request: StudyRequest, evidence: EvidenceBundle) -> str:
+        if not evidence.chunks:
+            return f"未找到足够证据回答：{request.query}"
+        lines = [chunk.content for chunk in evidence.chunks]
+        if evidence.sources:
+            lines.append("")
+            lines.append("Sources: " + ", ".join(evidence.sources))
+        return "\n\n".join(lines)
+
+    def _question_content(self, request: StudyRequest, evidence: EvidenceBundle) -> str:
+        basis = evidence.chunks[0].content if evidence.chunks else request.query
+        source = evidence.sources[0] if evidence.sources else "no-source"
+        return "\n".join(
+            [
+                "### Practice Question",
+                f"Explain the key idea in this material: {basis}",
+                "",
+                "### Answer",
+                basis,
+                "",
+                "### Explanation",
+                f"The answer should be grounded in source `{source}`.",
+                "",
+                "### Scoring Rubric",
+                "- 1 point for naming the core concept.",
+                "- 1 point for explaining the relationship or definition.",
+                "- 1 point for citing the source evidence.",
+            ]
+        )
+
+    def _outline_content(self, evidence: EvidenceBundle) -> str:
+        lines = ["## Study Notes"]
+        if not evidence.chunks:
+            lines.append("- No grounded notes available.")
+            return "\n".join(lines)
+        for chunk in evidence.chunks:
+            suffix = f" ({chunk.source})" if chunk.source else ""
+            lines.append(f"- {chunk.content}{suffix}")
+        return "\n".join(lines)
+
+
+class StudyVerifier:
+    def __init__(self, min_confidence: float = 0.2) -> None:
+        self.min_confidence = min_confidence
+        self.evaluator = RAGEvaluator()
+
+    def verify(
+        self,
+        request: StudyRequest,
+        evidence: EvidenceBundle,
+        draft: StudyDraft,
+    ) -> StudyVerification:
+        issues: list[str] = []
+        if not draft.citations:
+            issues.append("missing citations")
+        if evidence.confidence < self.min_confidence:
+            issues.append("low evidence confidence")
+        if draft.used_chunk_count == 0:
+            issues.append("no evidence chunks used")
+
+        score = self.evaluator.score(
+            RAGEvalCase(
+                id="study-agent-inline",
+                query=request.query,
+                category=request.target.value,
+                expected_sources=list(evidence.sources),
+                expected_terms=list(request.expected_terms),
+            ),
+            answer=draft.content,
+            sources=list(draft.citations),
+            latency_ms=0,
+            token_cost=0,
+        )
+        if request.expected_terms and score.answer_term_recall < 1.0:
+            issues.append("missing expected terms")
+
+        passed = not issues
+        return StudyVerification(
+            passed=passed,
+            needs_review=not passed,
+            confidence=min(evidence.confidence, score.source_recall, score.answer_term_recall),
+            issues=tuple(issues),
+            source_recall=score.source_recall,
+            answer_term_recall=score.answer_term_recall,
+        )
 
 
 class EvidenceCollector:
