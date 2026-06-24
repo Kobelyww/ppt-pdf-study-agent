@@ -42,13 +42,27 @@ function metadataLabel(metadata: Record<string, unknown>, index: number) {
 }
 
 function EvidenceViewer({ result }: EvidenceViewerProps) {
+  const citationLabels = new Map(
+    result.evidence.chunks.map((chunk, index) => [
+      chunk.source,
+      metadataLabel(chunk.metadata, index),
+    ]),
+  );
+  const usedFallbackMode = result.plan.mode !== result.evidence.mode;
+
   return (
     <div className="evidence-viewer" aria-label="Study Agent evidence">
       <dl className="agent-trace">
         <div>
           <dt>Mode</dt>
-          <dd>{result.plan.mode}</dd>
+          <dd>{result.evidence.mode}</dd>
         </div>
+        {usedFallbackMode ? (
+          <div>
+            <dt>Planned</dt>
+            <dd>{result.plan.mode}</dd>
+          </div>
+        ) : null}
         <div>
           <dt>Confidence</dt>
           <dd>{formatPercent(result.verification.confidence)}</dd>
@@ -82,7 +96,7 @@ function EvidenceViewer({ result }: EvidenceViewerProps) {
         {result.draft.citations.length > 0 ? (
           result.draft.citations.map((citation, index) => (
             <span className="citation-pill" key={`citation-${index}-${citation}`} role="listitem">
-              {citation}
+              {citationLabels.get(citation) ?? `Citation ${index + 1}`}
             </span>
           ))
         ) : (
