@@ -177,6 +177,8 @@ class StudyVerifier:
             latency_ms=0,
             token_cost=0,
         )
+        if evidence.sources and score.source_recall < 1.0:
+            issues.append("missing expected sources")
         if request.expected_terms and score.answer_term_recall < 1.0:
             issues.append("missing expected terms")
 

@@ -92,3 +92,41 @@ def test_verifier_flags_missing_citations_and_low_confidence():
     assert verification.needs_review is True
     assert "missing citations" in verification.issues
     assert "low evidence confidence" in verification.issues
+
+
+def test_verifier_flags_partial_source_recall():
+    request = StudyRequest(query="什么是导数？", expected_terms=("变化率",))
+    evidence = EvidenceBundle(
+        mode=RetrievalMode.SIMPLE,
+        chunks=(
+            Chunk(
+                content="导数描述函数的变化率。",
+                source="s1",
+                score=0.9,
+            ),
+            Chunk(
+                content="导数也可以用于切线斜率。",
+                source="s2",
+                score=0.8,
+            ),
+        ),
+        sources=("s1", "s2"),
+        concept_ids=("kp-derivative",),
+        confidence=0.9,
+        reason="simple token-overlap retrieval",
+    )
+    draft = StudyContentGenerator().generate(request, evidence)
+    partial_draft = draft.__class__(
+        target=draft.target,
+        content=draft.content,
+        citations=("s1",),
+        used_chunk_count=draft.used_chunk_count,
+        metadata=draft.metadata,
+    )
+
+    verification = StudyVerifier().verify(request, evidence, partial_draft)
+
+    assert verification.passed is False
+    assert verification.needs_review is True
+    assert verification.source_recall == 0.5
+    assert "missing expected sources" in verification.issues
