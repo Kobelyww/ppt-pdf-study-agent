@@ -19,6 +19,7 @@ import {
   submitFeedback,
   uploadDocument,
 } from "./api";
+import StudyAgentPanel from "./components/StudyAgentPanel";
 import DocumentsPage from "./pages/DocumentsPage";
 import JobDetailPage from "./pages/JobDetailPage";
 import LoginPage from "./pages/LoginPage";
@@ -280,7 +281,7 @@ function App() {
     }
   }
 
-  if (!authToken || !currentUser) {
+  if (!authToken || !currentUser || !apiClient) {
     return (
       <LoginPage
         error={error}
@@ -332,6 +333,13 @@ function App() {
             job={selectedJob}
             onRefreshJob={handleRefreshJob}
             onRetry={handleRetry}
+          />
+          <StudyAgentPanel
+            apiClient={apiClient}
+            documents={documents}
+            selectedDocumentId={selectedDocumentId}
+            onSelectDocument={setSelectedDocumentId}
+            onAuthExpired={handleLogout}
           />
           <div className="study-columns">
             <OutlinePage
