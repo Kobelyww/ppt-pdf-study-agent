@@ -9,7 +9,7 @@ from src.knowledge.knowledge_graph import KnowledgeGraph
 from src.services.agentic_rag import AgenticRAGPlanner
 from src.services.graph_rag import GraphRAGLiteRetriever
 from src.services.rag_evaluation import RAGEvalCase, RAGEvaluator
-from src.services.rag_router import RetrievalMode
+from src.services.rag_router import RAGStrategyRouter, RetrievalMode
 from src.services.rag_service import Chunk, RAGService
 
 
@@ -364,6 +364,84 @@ class EvidenceCollector:
                 seen_sources.add(chunk.source)
                 break
         return chunks[: self.top_k]
+
+
+class StudyAgentOrchestrator:
+    def __init__(
+        self,
+        *,
+        evidence_collector: EvidenceCollector,
+        generator: StudyContentGenerator | None = None,
+        verifier: StudyVerifier | None = None,
+        router: RAGStrategyRouter | None = None,
+    ) -> None:
+        self.evidence_collector = evidence_collector
+        self.generator = generator or StudyContentGenerator()
+        self.verifier = verifier or StudyVerifier()
+        self.router = router or RAGStrategyRouter()
+
+    async def run(self, payload: dict[str, Any]) -> StudyAgentResult:
+        request = normalize_study_request(payload)
+        plan = self._plan(request)
+        evidence = await self.evidence_collector.collect(request, mode=plan.mode)
+        draft = self.generator.generate(request, evidence)
+        verification = self.verifier.verify(request, evidence, draft)
+        return StudyAgentResult(
+            request=request,
+            plan=plan,
+            evidence=evidence,
+            draft=draft,
+            verification=verification,
+            audit_metadata={
+                "mode": plan.mode.value,
+                "target": request.target.value,
+                "needs_review": verification.needs_review,
+                "source_count": len(evidence.sources),
+                "chunk_count": len(evidence.chunks),
+            },
+        )
+
+    def _plan(self, request: StudyRequest) -> StudyPlan:
+        decision = self.router.route(request.query) if request.preferred_mode is None else None
+        mode = request.preferred_mode or decision.mode
+        reason = decision.reason if decision is not None else "preferred mode requested"
+        estimated_cost = decision.estimated_cost if decision is not None else self._cost_for(mode)
+        if request.budget == StudyBudget.LOW and mode == RetrievalMode.AGENTIC:
+            mode = RetrievalMode.SIMPLE
+            reason = "low budget prevents agentic retrieval"
+            estimated_cost = "low"
+
+        return StudyPlan(
+            mode=mode,
+            reason=reason,
+            steps=self._steps_for(mode, request),
+            estimated_cost=estimated_cost,
+            fallbacks=self._fallbacks_for(mode),
+        )
+
+    def _steps_for(self, mode: RetrievalMode, request: StudyRequest) -> tuple[str, ...]:
+        if mode == RetrievalMode.AGENTIC:
+            steps = ["retrieve", "expand", "synthesize", "verify"]
+            if request.target == StudyTarget.QUESTION:
+                steps.append("generate_question")
+            return tuple(steps)
+        if mode == RetrievalMode.GRAPH:
+            return ("match_seed_concepts", "expand_graph_neighbors", "recover_chunks")
+        return ("retrieve_chunks",)
+
+    def _fallbacks_for(self, mode: RetrievalMode) -> tuple[RetrievalMode, ...]:
+        if mode == RetrievalMode.AGENTIC:
+            return (RetrievalMode.GRAPH, RetrievalMode.SIMPLE)
+        if mode == RetrievalMode.GRAPH:
+            return (RetrievalMode.SIMPLE,)
+        return ()
+
+    def _cost_for(self, mode: RetrievalMode) -> str:
+        if mode == RetrievalMode.AGENTIC:
+            return "high"
+        if mode == RetrievalMode.GRAPH:
+            return "medium"
+        return "low"
 
 
 def normalize_study_request(payload: dict[str, Any]) -> StudyRequest:
