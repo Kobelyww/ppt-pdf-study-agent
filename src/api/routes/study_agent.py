@@ -9,6 +9,8 @@ from pydantic import BaseModel, Field, field_validator
 
 from src.api.request_context import get_user_context
 from src.security.audit import record_audit_event
+from src.services.study_agent_documents import StudyAgentDocumentError
+from src.services.study_agent_runtime import StudyAgentRuntimeService
 
 
 class StudyAgentQueryRequest(BaseModel):
@@ -36,14 +38,16 @@ async def query_study_agent(
     request: Request,
 ) -> dict[str, Any]:
     context = get_user_context(request)
-    orchestrator = getattr(request.app.state, "study_agent_orchestrator", None)
-    if orchestrator is None:
+    runner = _study_agent_runner(request)
+    if runner is None:
         raise HTTPException(status_code=503, detail="Study agent is not configured")
     payload_data = payload.model_dump(exclude_none=True)
     payload_data["authenticated_user_id"] = context.user_id
     payload_data["request_id"] = context.request_id
     try:
-        result = await orchestrator.run(payload_data)
+        result = await runner.run(payload_data)
+    except StudyAgentDocumentError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     _record_study_agent_audit(
@@ -54,6 +58,24 @@ async def query_study_agent(
         payload=payload_data,
     )
     return _to_jsonable(result)
+
+
+def _study_agent_runner(request: Request) -> Any | None:
+    orchestrator = getattr(request.app.state, "study_agent_orchestrator", None)
+    if orchestrator is not None:
+        return orchestrator
+
+    runtime = getattr(request.app.state, "study_agent_runtime_service", None)
+    if runtime is not None:
+        return runtime
+
+    session_factory = getattr(request.app.state, "session_factory", None)
+    if session_factory is None:
+        return None
+
+    runtime = StudyAgentRuntimeService(session_factory=session_factory)
+    request.app.state.study_agent_runtime_service = runtime
+    return runtime
 
 
 def _to_jsonable(value: Any) -> Any:

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -7,7 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from src.api.app import create_app
-from src.db.models import AuditEventRecord, Base, UserRecord
+from src.db.models import AuditEventRecord, Base, Document, DocumentArtifactRecord, UserRecord
 from src.security.auth import hash_password
 from src.services.rag_router import RetrievalMode
 from src.services.rag_service import Chunk
@@ -230,19 +231,16 @@ def test_study_agent_query_persists_sanitized_audit_event(tmp_path: Path):
 
 
 def test_study_agent_query_returns_503_without_orchestrator(tmp_path: Path):
-    Session = _session_factory()
     app = create_app(
-        session_factory=Session,
         secret_key="test-secret",
-        allow_dev_user_header=False,
+        allow_dev_user_header=True,
     )
     client = TestClient(app)
-    headers = _login(client)
 
     response = client.post(
         "/api/study-agent/query",
         json={"query": "什么是导数？"},
-        headers=headers,
+        headers={"x-user-id": "user-1"},
     )
 
     assert response.status_code == 503
@@ -268,3 +266,153 @@ def test_study_agent_query_maps_value_error_to_422(tmp_path: Path):
 
     assert response.status_code == 422
     assert response.json()["detail"] == "bad study request"
+
+
+def _runtime_client():
+    Session = _session_factory()
+    app = create_app(
+        session_factory=Session,
+        secret_key="test-secret",
+        allow_dev_user_header=False,
+    )
+    return TestClient(app), Session
+
+
+def _insert_study_document(
+    Session,
+    *,
+    document_id: str,
+    owner_id: str,
+    status: str = "ready",
+    content: str | None = "Derivatives measure instantaneous rate of change.",
+) -> None:
+    now = datetime.now(timezone.utc)
+    with Session() as session:
+        session.add(
+            Document(
+                id=document_id,
+                owner_id=owner_id,
+                title="Calculus Notes",
+                source_type="pdf",
+                storage_uri=f"local://uploads/{document_id}.pdf",
+                content_hash=f"hash-{document_id}",
+                original_filename=f"{document_id}.pdf",
+                status=status,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        if content is not None:
+            session.add(
+                DocumentArtifactRecord(
+                    id=f"artifact-{document_id}",
+                    document_id=document_id,
+                    artifact_type="normalized_document",
+                    content=content,
+                    artifact_metadata={"source": "api-test"},
+                    created_at=now,
+                )
+            )
+        session.commit()
+
+
+def test_study_agent_query_uses_default_runtime_when_orchestrator_is_not_injected():
+    client, Session = _runtime_client()
+    _insert_study_document(Session, document_id="doc-study", owner_id="user-1")
+    headers = _login(client)
+
+    response = client.post(
+        "/api/study-agent/query",
+        json={
+            "query": "What do derivatives measure?",
+            "target": "answer",
+            "document_ids": ["doc-study"],
+            "expected_terms": ["rate"],
+        },
+        headers={**headers, "x-request-id": "req-study-runtime"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["evidence"]["sources"] == ["document:doc-study:chunk:0"]
+    assert payload["evidence"]["chunks"][0]["metadata"]["owner_id"] == "user-1"
+    assert payload["evidence"]["chunks"][0]["metadata"]["document_id"] == "doc-study"
+    assert payload["verification"]["needs_review"] is False
+
+
+def test_study_agent_default_runtime_requires_document_ids():
+    client, _Session = _runtime_client()
+    headers = _login(client)
+
+    response = client.post(
+        "/api/study-agent/query",
+        json={"query": "What do derivatives measure?"},
+        headers=headers,
+    )
+
+    assert response.status_code == 422
+    assert "explicit document selection" in response.json()["detail"]
+
+
+def test_study_agent_default_runtime_hides_cross_user_document():
+    client, Session = _runtime_client()
+    _insert_study_document(Session, document_id="doc-private", owner_id="user-2")
+    headers = _login(client)
+
+    response = client.post(
+        "/api/study-agent/query",
+        json={
+            "query": "What do derivatives measure?",
+            "document_ids": ["doc-private"],
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Selected document is unavailable to the current user."
+
+
+def test_study_agent_default_runtime_rejects_non_ready_document():
+    client, Session = _runtime_client()
+    _insert_study_document(
+        Session,
+        document_id="doc-processing",
+        owner_id="user-1",
+        status="processing",
+    )
+    headers = _login(client)
+
+    response = client.post(
+        "/api/study-agent/query",
+        json={
+            "query": "What do derivatives measure?",
+            "document_ids": ["doc-processing"],
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 422
+    assert "must finish processing" in response.json()["detail"]
+
+
+def test_study_agent_default_runtime_rejects_ready_document_without_artifact():
+    client, Session = _runtime_client()
+    _insert_study_document(
+        Session,
+        document_id="doc-no-artifact",
+        owner_id="user-1",
+        content=None,
+    )
+    headers = _login(client)
+
+    response = client.post(
+        "/api/study-agent/query",
+        json={
+            "query": "What do derivatives measure?",
+            "document_ids": ["doc-no-artifact"],
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 422
+    assert "Processed document evidence is unavailable" in response.json()["detail"]

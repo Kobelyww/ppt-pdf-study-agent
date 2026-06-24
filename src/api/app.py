@@ -131,6 +131,7 @@ def create_app(
     export_service: Any | None = None,
     feedback_service: Any | None = None,
     study_agent_orchestrator: Any | None = None,
+    study_agent_runtime_service: Any | None = None,
     secret_key: str | None = None,
     allow_dev_user_header: bool | None = None,
     cors_origins: list[str] | None = None,
@@ -183,6 +184,7 @@ def create_app(
         app.state.export_service = export_service or ExportService()
     app.state.feedback_service = feedback_service or FeedbackService()
     app.state.study_agent_orchestrator = study_agent_orchestrator
+    app.state.study_agent_runtime_service = study_agent_runtime_service
     app.state.job_queue = job_queue
     app.state.readiness_checks = readiness_checks or {}
 
