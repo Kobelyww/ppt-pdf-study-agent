@@ -7,7 +7,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from src.api.app import create_app
-from src.db.models import Base, UserRecord
+from src.db.models import AuditEventRecord, Base, UserRecord
 from src.security.auth import hash_password
 from src.services.rag_router import RetrievalMode
 from src.services.rag_service import Chunk
@@ -107,7 +107,7 @@ def _client(tmp_path: Path):
         allow_dev_user_header=False,
         study_agent_orchestrator=orchestrator,
     )
-    return TestClient(app), orchestrator
+    return TestClient(app), orchestrator, Session
 
 
 def _login(client: TestClient) -> dict[str, str]:
@@ -120,7 +120,7 @@ def _login(client: TestClient) -> dict[str, str]:
 
 
 def test_study_agent_query_requires_authentication(tmp_path: Path):
-    client, _orchestrator = _client(tmp_path)
+    client, _orchestrator, _Session = _client(tmp_path)
 
     response = client.post("/api/study-agent/query", json={"query": "什么是导数？"})
 
@@ -128,7 +128,7 @@ def test_study_agent_query_requires_authentication(tmp_path: Path):
 
 
 def test_study_agent_query_returns_trace_payload(tmp_path: Path):
-    client, orchestrator = _client(tmp_path)
+    client, orchestrator, _Session = _client(tmp_path)
     headers = _login(client)
 
     response = client.post(
@@ -155,7 +155,7 @@ def test_study_agent_query_returns_trace_payload(tmp_path: Path):
 
 
 def test_study_agent_query_uses_authenticated_user_context(tmp_path: Path):
-    client, orchestrator = _client(tmp_path)
+    client, orchestrator, _Session = _client(tmp_path)
     headers = _login(client)
 
     response = client.post(
@@ -180,7 +180,7 @@ def test_study_agent_query_uses_authenticated_user_context(tmp_path: Path):
 
 
 def test_study_agent_query_validates_payload(tmp_path: Path):
-    client, _orchestrator = _client(tmp_path)
+    client, _orchestrator, _Session = _client(tmp_path)
     headers = _login(client)
 
     response = client.post(
@@ -190,6 +190,43 @@ def test_study_agent_query_validates_payload(tmp_path: Path):
     )
 
     assert response.status_code == 422
+
+
+def test_study_agent_query_persists_sanitized_audit_event(tmp_path: Path):
+    client, _orchestrator, Session = _client(tmp_path)
+    headers = _login(client)
+
+    response = client.post(
+        "/api/study-agent/query",
+        json={
+            "query": "什么是导数？",
+            "target": "answer",
+            "document_ids": ["doc-allowed"],
+        },
+        headers={**headers, "x-request-id": "req-study-audit"},
+    )
+
+    assert response.status_code == 200
+    with Session() as session:
+        events = session.query(AuditEventRecord).all()
+
+    assert len(events) == 1
+    event = events[0]
+    assert event.actor_id == "user-1"
+    assert event.action == "study_agent.query"
+    assert event.resource_type == "study_agent"
+    assert event.resource_id == "req-study-audit"
+    assert event.request_id == "req-study-audit"
+    assert event.event_metadata["mode"] == "simple_rag"
+    assert event.event_metadata["target"] == "answer"
+    assert event.event_metadata["needs_review"] is False
+    assert event.event_metadata["source_count"] == 1
+    assert event.event_metadata["chunk_count"] == 1
+    assert event.event_metadata["document_count"] == 1
+    assert "query" not in event.event_metadata
+    assert "content" not in event.event_metadata
+    assert "sources" not in event.event_metadata
+    assert "chunks" not in event.event_metadata
 
 
 def test_study_agent_query_returns_503_without_orchestrator(tmp_path: Path):

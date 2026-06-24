@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
 from src.api.request_context import get_user_context
+from src.security.audit import record_audit_event
 
 
 class StudyAgentQueryRequest(BaseModel):
@@ -45,6 +46,13 @@ async def query_study_agent(
         result = await orchestrator.run(payload_data)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    _record_study_agent_audit(
+        request,
+        actor_id=context.user_id,
+        request_id=context.request_id,
+        result=result,
+        payload=payload_data,
+    )
     return _to_jsonable(result)
 
 
@@ -58,3 +66,35 @@ def _to_jsonable(value: Any) -> Any:
     if isinstance(value, Enum):
         return value.value
     return value
+
+
+def _record_study_agent_audit(
+    request: Request,
+    *,
+    actor_id: str,
+    request_id: str,
+    result: Any,
+    payload: dict[str, Any],
+) -> None:
+    session_factory = getattr(request.app.state, "session_factory", None)
+    if session_factory is None:
+        return
+
+    audit_metadata = getattr(result, "audit_metadata", {}) or {}
+    metadata = {
+        "mode": audit_metadata.get("mode"),
+        "target": audit_metadata.get("target"),
+        "needs_review": audit_metadata.get("needs_review"),
+        "source_count": audit_metadata.get("source_count"),
+        "chunk_count": audit_metadata.get("chunk_count"),
+        "document_count": len(payload.get("document_ids") or []),
+    }
+    record_audit_event(
+        session_factory=session_factory,
+        actor_id=actor_id,
+        action="study_agent.query",
+        resource_type="study_agent",
+        resource_id=request_id or "study-agent-query",
+        request_id=request_id,
+        metadata=metadata,
+    )

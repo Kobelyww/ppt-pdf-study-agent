@@ -33,6 +33,8 @@ class StudyRequest:
     preferred_mode: RetrievalMode | None = None
     budget: StudyBudget = StudyBudget.BALANCED
     expected_terms: tuple[str, ...] = ()
+    authenticated_user_id: str | None = None
+    request_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -226,9 +228,10 @@ class EvidenceCollector:
         request: StudyRequest,
         fallback_reason: str | None = None,
     ) -> EvidenceBundle:
-        chunks = self.rag_service.retrieve(request.query, top_k=self.top_k)
+        scoped_service = self._scoped_rag_service(request)
+        chunks = scoped_service.retrieve(request.query, top_k=self.top_k)
         if not chunks:
-            chunks = self._substring_fallback_chunks(request.query)
+            chunks = self._substring_fallback_chunks(request)
 
         return EvidenceBundle(
             mode=RetrievalMode.SIMPLE,
@@ -244,13 +247,13 @@ class EvidenceCollector:
             fallback_reason=fallback_reason,
         )
 
-    def _substring_fallback_chunks(self, query: str) -> list[Chunk]:
-        terms = _query_terms(query)
+    def _substring_fallback_chunks(self, request: StudyRequest) -> list[Chunk]:
+        terms = _query_terms(request.query)
         if not terms or self.top_k <= 0:
             return []
 
         ranked: list[tuple[int, Chunk]] = []
-        for chunk in self.rag_service._chunks:
+        for chunk in self._scoped_chunks(request):
             content = chunk.content.lower()
             source = chunk.source.lower()
             match_score = max(
@@ -286,7 +289,7 @@ class EvidenceCollector:
         if self.graph is None:
             return self._simple_bundle(request, fallback_reason="no graph configured")
 
-        result = await GraphRAGLiteRetriever(self.graph, self.rag_service._chunks).retrieve(
+        result = await GraphRAGLiteRetriever(self.graph, self._scoped_chunks(request)).retrieve(
             request.query,
             top_k=self.top_k,
         )
@@ -296,8 +299,10 @@ class EvidenceCollector:
         chunks = result.chunks
         if result.expanded_point_ids:
             chunks = self._recover_chunks_by_concept_id(
+                request=request,
                 point_ids=result.expanded_point_ids,
                 existing_chunks=chunks,
+                scoped_chunks=self._scoped_chunks(request),
             )
         if not chunks:
             return self._simple_bundle(request, fallback_reason=result.reason)
@@ -340,15 +345,18 @@ class EvidenceCollector:
     def _recover_chunks_by_concept_id(
         self,
         *,
+        request: StudyRequest,
         point_ids: list[str],
         existing_chunks: list[Chunk],
+        scoped_chunks: list[Chunk] | None = None,
     ) -> list[Chunk]:
         chunks = list(existing_chunks)
         seen_sources = {chunk.source for chunk in chunks}
+        candidate_chunks = scoped_chunks if scoped_chunks is not None else self._scoped_chunks(request)
         for point_id in point_ids:
             if len(chunks) >= self.top_k:
                 break
-            for chunk in self.rag_service._chunks:
+            for chunk in candidate_chunks:
                 if chunk.source in seen_sources:
                     continue
                 if chunk.metadata.get("concept_id") != point_id:
@@ -364,6 +372,40 @@ class EvidenceCollector:
                 seen_sources.add(chunk.source)
                 break
         return chunks[: self.top_k]
+
+    def _scoped_rag_service(self, request: StudyRequest) -> RAGService:
+        scoped_service = RAGService()
+        scoped_service._chunks = self._scoped_chunks(request)
+        return scoped_service
+
+    def _scoped_chunks(self, request: StudyRequest) -> list[Chunk]:
+        return [
+            Chunk(
+                content=chunk.content,
+                source=chunk.source,
+                metadata=chunk.metadata.copy(),
+                score=chunk.score,
+            )
+            for chunk in self.rag_service._chunks
+            if self._chunk_allowed(request, chunk)
+        ]
+
+    def _chunk_allowed(self, request: StudyRequest, chunk: Chunk) -> bool:
+        document_ids = set(request.document_ids)
+        document_id = str(chunk.metadata.get("document_id", "")).strip()
+        owner_id = str(chunk.metadata.get("owner_id", "")).strip()
+
+        if document_ids and (not document_id or document_id not in document_ids):
+            return False
+
+        if request.authenticated_user_id:
+            authenticated_user_id = request.authenticated_user_id.strip()
+            if owner_id:
+                return owner_id == authenticated_user_id
+            if document_ids:
+                return False
+
+        return True
 
 
 class StudyAgentOrchestrator:
@@ -471,6 +513,8 @@ def normalize_study_request(payload: dict[str, Any]) -> StudyRequest:
         preferred_mode=mode,
         budget=budget,
         expected_terms=_dedupe_nonempty(payload.get("expected_terms") or []),
+        authenticated_user_id=_optional_nonempty(payload.get("authenticated_user_id")),
+        request_id=_optional_nonempty(payload.get("request_id")),
     )
 
 
@@ -488,6 +532,13 @@ def _dedupe_nonempty(values: list[Any] | tuple[Any, ...]) -> tuple[str, ...]:
         if normalized:
             seen.setdefault(normalized, None)
     return tuple(seen)
+
+
+def _optional_nonempty(value: Any) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
 
 
 def _unique(values) -> tuple[str, ...]:

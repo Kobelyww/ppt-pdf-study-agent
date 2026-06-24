@@ -30,6 +30,33 @@ def _rag_service() -> RAGService:
     return service
 
 
+def _scoped_rag_service() -> RAGService:
+    service = RAGService()
+    service.index_chunks(
+        [
+            {
+                "content": "导数描述函数的变化率。",
+                "source": "user-1/doc-allowed",
+                "metadata": {
+                    "owner_id": "user-1",
+                    "document_id": "doc-allowed",
+                    "concept_id": "kp-derivative",
+                },
+            },
+            {
+                "content": "导数是另一个用户的私有内容。",
+                "source": "user-2/doc-other",
+                "metadata": {
+                    "owner_id": "user-2",
+                    "document_id": "doc-other",
+                    "concept_id": "kp-private",
+                },
+            },
+        ]
+    )
+    return service
+
+
 def _graph() -> KnowledgeGraph:
     graph = KnowledgeGraph()
     graph.add_point(
@@ -75,6 +102,39 @@ async def test_collects_simple_rag_evidence_with_sources_and_confidence():
     assert bundle.concept_ids == ("kp-derivative",)
     assert bundle.confidence > 0
     assert bundle.reason == "simple token-overlap retrieval"
+
+
+@pytest.mark.asyncio
+async def test_simple_evidence_is_limited_to_authenticated_user_document_scope():
+    collector = EvidenceCollector(rag_service=_scoped_rag_service())
+    request = StudyRequest(
+        query="什么是导数？",
+        document_ids=("doc-allowed",),
+        authenticated_user_id="user-1",
+    )
+
+    bundle = await collector.collect(request, mode=RetrievalMode.SIMPLE)
+
+    assert bundle.sources == ("user-1/doc-allowed",)
+    assert [chunk.content for chunk in bundle.chunks] == ["导数描述函数的变化率。"]
+    assert "user-2/doc-other" not in bundle.sources
+    assert all("私有内容" not in chunk.content for chunk in bundle.chunks)
+
+
+@pytest.mark.asyncio
+async def test_simple_evidence_returns_empty_when_document_scope_is_not_owned():
+    collector = EvidenceCollector(rag_service=_scoped_rag_service())
+    request = StudyRequest(
+        query="什么是导数？",
+        document_ids=("doc-other",),
+        authenticated_user_id="user-1",
+    )
+
+    bundle = await collector.collect(request, mode=RetrievalMode.SIMPLE)
+
+    assert bundle.chunks == ()
+    assert bundle.sources == ()
+    assert bundle.confidence == 0.0
 
 
 @pytest.mark.asyncio
