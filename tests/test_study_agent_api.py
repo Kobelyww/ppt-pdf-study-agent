@@ -70,7 +70,13 @@ class FakeStudyAgentOrchestrator:
         )
 
 
-def _client(tmp_path: Path):
+@dataclass
+class FailingStudyAgentOrchestrator:
+    async def run(self, payload: dict) -> StudyAgentResult:
+        raise ValueError("bad study request")
+
+
+def _session_factory():
     engine = create_engine(
         "sqlite:///:memory:",
         connect_args={"check_same_thread": False},
@@ -89,6 +95,11 @@ def _client(tmp_path: Path):
             )
         )
         session.commit()
+    return Session
+
+
+def _client(tmp_path: Path):
+    Session = _session_factory()
     orchestrator = FakeStudyAgentOrchestrator(payloads=[])
     app = create_app(
         session_factory=Session,
@@ -123,7 +134,7 @@ def test_study_agent_query_returns_trace_payload(tmp_path: Path):
     response = client.post(
         "/api/study-agent/query",
         json={"query": "什么是导数？", "expected_terms": ["变化率"]},
-        headers=headers,
+        headers={**headers, "x-request-id": "req-study-1"},
     )
 
     assert response.status_code == 200
@@ -133,7 +144,39 @@ def test_study_agent_query_returns_trace_payload(tmp_path: Path):
     assert payload["evidence"]["sources"] == ["calculus:derivative"]
     assert payload["draft"]["citations"] == ["calculus:derivative"]
     assert payload["verification"]["passed"] is True
-    assert orchestrator.payloads == [{"query": "什么是导数？", "expected_terms": ["变化率"]}]
+    assert orchestrator.payloads == [
+        {
+            "query": "什么是导数？",
+            "expected_terms": ["变化率"],
+            "authenticated_user_id": "user-1",
+            "request_id": "req-study-1",
+        }
+    ]
+
+
+def test_study_agent_query_uses_authenticated_user_context(tmp_path: Path):
+    client, orchestrator = _client(tmp_path)
+    headers = _login(client)
+
+    response = client.post(
+        "/api/study-agent/query",
+        json={
+            "query": "什么是导数？",
+            "user_id": "attacker",
+            "owner_id": "attacker",
+            "created_by": "attacker",
+        },
+        headers={**headers, "x-request-id": "req-study-2"},
+    )
+
+    assert response.status_code == 200
+    assert orchestrator.payloads == [
+        {
+            "query": "什么是导数？",
+            "authenticated_user_id": "user-1",
+            "request_id": "req-study-2",
+        }
+    ]
 
 
 def test_study_agent_query_validates_payload(tmp_path: Path):
@@ -147,3 +190,44 @@ def test_study_agent_query_validates_payload(tmp_path: Path):
     )
 
     assert response.status_code == 422
+
+
+def test_study_agent_query_returns_503_without_orchestrator(tmp_path: Path):
+    Session = _session_factory()
+    app = create_app(
+        session_factory=Session,
+        secret_key="test-secret",
+        allow_dev_user_header=False,
+    )
+    client = TestClient(app)
+    headers = _login(client)
+
+    response = client.post(
+        "/api/study-agent/query",
+        json={"query": "什么是导数？"},
+        headers=headers,
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Study agent is not configured"
+
+
+def test_study_agent_query_maps_value_error_to_422(tmp_path: Path):
+    Session = _session_factory()
+    app = create_app(
+        session_factory=Session,
+        secret_key="test-secret",
+        allow_dev_user_header=False,
+        study_agent_orchestrator=FailingStudyAgentOrchestrator(),
+    )
+    client = TestClient(app)
+    headers = _login(client)
+
+    response = client.post(
+        "/api/study-agent/query",
+        json={"query": "什么是导数？"},
+        headers=headers,
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "bad study request"

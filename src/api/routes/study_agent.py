@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, is_dataclass
+from enum import Enum
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -33,12 +34,15 @@ async def query_study_agent(
     payload: StudyAgentQueryRequest,
     request: Request,
 ) -> dict[str, Any]:
-    get_user_context(request)
+    context = get_user_context(request)
     orchestrator = getattr(request.app.state, "study_agent_orchestrator", None)
     if orchestrator is None:
         raise HTTPException(status_code=503, detail="Study agent is not configured")
+    payload_data = payload.model_dump(exclude_none=True)
+    payload_data["authenticated_user_id"] = context.user_id
+    payload_data["request_id"] = context.request_id
     try:
-        result = await orchestrator.run(payload.model_dump(exclude_none=True))
+        result = await orchestrator.run(payload_data)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return _to_jsonable(result)
@@ -51,6 +55,6 @@ def _to_jsonable(value: Any) -> Any:
         return {key: _to_jsonable(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [_to_jsonable(item) for item in value]
-    if hasattr(value, "value"):
+    if isinstance(value, Enum):
         return value.value
     return value
