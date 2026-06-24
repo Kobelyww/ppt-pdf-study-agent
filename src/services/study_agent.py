@@ -98,10 +98,17 @@ class EvidenceCollector:
         self.top_k = top_k
 
     async def collect(self, request: StudyRequest, mode: RetrievalMode) -> EvidenceBundle:
-        if mode == RetrievalMode.GRAPH:
+        try:
+            retrieval_mode = RetrievalMode(mode)
+        except ValueError as exc:
+            raise ValueError(f"unsupported retrieval mode: {mode}") from exc
+
+        if retrieval_mode == RetrievalMode.GRAPH:
             return await self._graph_bundle(request)
-        if mode == RetrievalMode.AGENTIC:
+        if retrieval_mode == RetrievalMode.AGENTIC:
             return await self._agentic_bundle(request)
+        if retrieval_mode != RetrievalMode.SIMPLE:
+            raise ValueError(f"unsupported retrieval mode: {mode}")
         return self._simple_bundle(request)
 
     def _simple_bundle(
@@ -182,6 +189,8 @@ class EvidenceCollector:
                 point_ids=result.expanded_point_ids,
                 existing_chunks=chunks,
             )
+        if not chunks:
+            return self._simple_bundle(request, fallback_reason=result.reason)
 
         return EvidenceBundle(
             mode=RetrievalMode.GRAPH,
@@ -205,8 +214,18 @@ class EvidenceCollector:
 
         self.agentic_planner.plan(request.query)
         if self.graph is not None:
-            return await self._graph_bundle(request)
-        return self._simple_bundle(request)
+            graph_bundle = await self._graph_bundle(request)
+            if graph_bundle.mode == RetrievalMode.GRAPH and graph_bundle.chunks:
+                return EvidenceBundle(
+                    mode=RetrievalMode.AGENTIC,
+                    chunks=graph_bundle.chunks,
+                    sources=graph_bundle.sources,
+                    concept_ids=graph_bundle.concept_ids,
+                    confidence=graph_bundle.confidence,
+                    reason="agentic plan with graph-expanded evidence",
+                    fallback_reason=graph_bundle.fallback_reason,
+                )
+        return self._simple_bundle(request, fallback_reason="agentic evidence unavailable")
 
     def _recover_chunks_by_concept_id(
         self,

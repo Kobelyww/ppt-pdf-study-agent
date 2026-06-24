@@ -54,6 +54,15 @@ def _graph() -> KnowledgeGraph:
     return graph
 
 
+class _RecordingPlanner:
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
+    def plan(self, query: str):
+        self.queries.append(query)
+        return None
+
+
 @pytest.mark.asyncio
 async def test_collects_simple_rag_evidence_with_sources_and_confidence():
     collector = EvidenceCollector(rag_service=_rag_service(), graph=_graph())
@@ -106,3 +115,62 @@ async def test_low_budget_agentic_request_uses_simple_evidence():
 
     assert bundle.mode == RetrievalMode.SIMPLE
     assert bundle.fallback_reason == "low budget prevents agentic retrieval"
+
+
+@pytest.mark.asyncio
+async def test_unsupported_mode_raises_value_error():
+    collector = EvidenceCollector(rag_service=_rag_service(), graph=_graph())
+    request = StudyRequest(query="什么是导数？")
+
+    with pytest.raises(ValueError, match="unsupported retrieval mode: unsupported"):
+        await collector.collect(request, mode="unsupported")
+
+
+@pytest.mark.asyncio
+async def test_graph_seed_without_recoverable_chunks_falls_back_to_simple_with_graph_reason():
+    collector = EvidenceCollector(rag_service=RAGService(), graph=_graph())
+    request = StudyRequest(query="导数是什么？")
+
+    bundle = await collector.collect(request, mode=RetrievalMode.GRAPH)
+
+    assert bundle.mode == RetrievalMode.SIMPLE
+    assert bundle.fallback_reason == "matched graph seed but no chunks recovered"
+    assert bundle.confidence == 0.0
+
+
+@pytest.mark.asyncio
+async def test_non_low_agentic_successful_graph_evidence_returns_agentic_bundle():
+    planner = _RecordingPlanner()
+    collector = EvidenceCollector(
+        rag_service=_rag_service(),
+        graph=_graph(),
+        agentic_planner=planner,
+    )
+    request = StudyRequest(query="导数和梯度有什么关系？", budget=StudyBudget.BALANCED)
+
+    bundle = await collector.collect(request, mode=RetrievalMode.AGENTIC)
+
+    assert planner.queries == ["导数和梯度有什么关系？"]
+    assert bundle.mode == RetrievalMode.AGENTIC
+    assert bundle.sources == ("calculus:derivative", "calculus:gradient")
+    assert bundle.concept_ids == ("kp-derivative", "kp-gradient")
+    assert bundle.confidence > 0
+    assert bundle.reason == "agentic plan with graph-expanded evidence"
+
+
+@pytest.mark.asyncio
+async def test_non_low_agentic_unavailable_evidence_falls_back_to_simple():
+    planner = _RecordingPlanner()
+    collector = EvidenceCollector(
+        rag_service=RAGService(),
+        graph=_graph(),
+        agentic_planner=planner,
+    )
+    request = StudyRequest(query="导数是什么？", budget=StudyBudget.HIGH)
+
+    bundle = await collector.collect(request, mode=RetrievalMode.AGENTIC)
+
+    assert planner.queries == ["导数是什么？"]
+    assert bundle.mode == RetrievalMode.SIMPLE
+    assert bundle.fallback_reason == "agentic evidence unavailable"
+    assert bundle.confidence == 0.0
