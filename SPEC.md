@@ -1,6 +1,12 @@
 # PPT/PDF转复习提纲和考试例题智能系统设计文档
 
-## 0. 当前实现状态：MVP-8 正式产品基础
+## 0. 当前实现状态：MVP-9 Agentic Study Pipeline 规划中
+
+MVP-9 的目标是在 MVP-8 正式产品底座之上补齐可追踪的 agent 学习工作流：自动路由 simple RAG、Graph RAG Lite 和 Agentic RAG，收集 evidence bundle，生成带引用的答案/题目/提纲片段，并通过 verifier 标记低置信度或需要人工审核的结果。
+
+当前实现计划见 `docs/superpowers/specs/2026-06-24-agentic-study-pipeline-design.md` 和 `docs/superpowers/plans/2026-06-24-agentic-study-pipeline.md`。MVP-9 第一阶段保持确定性、可测试、可审计；真实 LLM provider 优化、Hermes 自进化和大规模向量数据库优化仍为后续阶段。
+
+## 0.1 历史状态：MVP-8 正式产品基础
 
 截至当前实现，项目已经从 MVP-7 内部Beta产品闭环推进到 MVP-8 Production Readiness Foundation。MVP-8 的目标不是继续扩大智能能力，而是先把正式产品运行底座补齐：身份、授权、数据库、队列、对象存储、健康检查、部署形态和CI。
 
@@ -16,7 +22,7 @@
 - **CI**：GitHub Actions 运行 backend `pytest -q`、`docker compose config` 和 frontend `npm run build`。
 - **RAG边界**：普通 RAG、Graph RAG、Agentic RAG 的自动路由实验保留到 MVP-9；MVP-8 只确保未来实验能落在可靠产品底座上。
 
-### 0.1 MVP-8 验收边界
+### 0.1.1 MVP-8 验收边界
 
 - 用户必须能通过登录 token 调用产品 API。
 - `APP_ENV=production` 必须禁止 `ALLOW_DEV_USER_HEADER`，并拒绝 placeholder `SECRET_KEY`。
@@ -37,7 +43,7 @@
 - **审计**：关键动作会写入 `audit_events`，包括 document upload、job retry、export create、feedback create、review decision；审计 metadata 过滤 raw content、authorization、token、secret、password 等敏感内容。
 - **验证**：后端测试覆盖 owner 隔离、审计过滤、上传/处理/版本/导出链路；前端通过 TypeScript + Vite build 验证 API 驱动界面。
 
-### 0.1 内部Beta边界和非目标
+### 0.2.1 内部Beta边界和非目标
 
 - `x-user-id` 是内部Beta测试身份，不是正式认证；正式产品仍需要真实 auth、session、RBAC/ABAC 和租户模型。
 - 当前队列为进程内/测试友好实现，生产化 Redis/Celery/RQ 不在 MVP-7 范围内。

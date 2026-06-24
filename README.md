@@ -13,6 +13,12 @@
 
 ## 当前实现状态
 
+### MVP-9 Agentic Study Pipeline
+
+下一阶段实现计划：构建确定性、可追踪的 study-agent 工作流，在 simple RAG、Graph RAG Lite 和 Agentic RAG 之间自动路由学习查询；收集 evidence；生成带引用的复习内容；并验证结果应直接返回还是标记为人工审核。
+
+### MVP-8 Production Readiness Foundation
+
 当前代码已进入 MVP-8 Production Readiness Foundation 阶段：
 
 - FastAPI 提供 `/api/documents`、`/api/jobs`、`/api/exports`、`/api/feedback`、`/api/review-tasks` 等产品接口。
