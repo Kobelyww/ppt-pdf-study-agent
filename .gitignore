@@ -14,5 +14,5 @@ frontend/.npm-cache/
 
 *.sqlite
 *.db
-storage/
-exports/
+/storage/
+/exports/
