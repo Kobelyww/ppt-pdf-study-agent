@@ -79,6 +79,71 @@ export interface LoginResult {
   token_type: string;
 }
 
+export type StudyTarget = "answer" | "question" | "outline_fragment";
+export type StudyBudget = "low" | "balanced" | "high";
+export type StudyRetrievalMode = "simple_rag" | "graph_rag_lite" | "agentic_rag";
+
+export interface StudyAgentQueryPayload {
+  query: string;
+  target: StudyTarget;
+  document_ids: string[];
+  preferred_mode?: StudyRetrievalMode;
+  budget?: StudyBudget;
+  expected_terms?: string[];
+}
+
+export interface StudyAgentChunk {
+  content: string;
+  source: string;
+  metadata: Record<string, unknown>;
+  score: number;
+}
+
+export interface StudyAgentResult {
+  request: {
+    query: string;
+    target: StudyTarget;
+    document_ids: string[];
+    preferred_mode?: StudyRetrievalMode | null;
+    budget: StudyBudget;
+    expected_terms: string[];
+    authenticated_user_id?: string | null;
+    request_id?: string | null;
+  };
+  plan: {
+    mode: StudyRetrievalMode;
+    reason: string;
+    steps: string[];
+    estimated_cost: string;
+    fallbacks: StudyRetrievalMode[];
+  };
+  evidence: {
+    mode: StudyRetrievalMode;
+    chunks: StudyAgentChunk[];
+    sources: string[];
+    concept_ids: string[];
+    confidence: number;
+    reason: string;
+    fallback_reason?: string | null;
+  };
+  draft: {
+    target: StudyTarget;
+    content: string;
+    citations: string[];
+    used_chunk_count: number;
+    metadata: Record<string, unknown>;
+  };
+  verification: {
+    passed: boolean;
+    needs_review: boolean;
+    confidence: number;
+    issues: string[];
+    source_recall: number;
+    answer_term_recall: number;
+  };
+  audit_metadata: Record<string, unknown>;
+}
+
 const API_BASE =
   (import.meta as ImportMeta & { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE ??
   "http://localhost:8000";
@@ -111,15 +176,41 @@ export class ApiClient {
   }
 }
 
+function apiDetailMessage(body: unknown): string | null {
+  if (!body || typeof body !== "object") return null;
+  const detail = "detail" in body ? (body as { detail?: unknown }).detail : null;
+  if (typeof detail === "string" && detail.trim()) return detail.trim();
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (item && typeof item === "object" && "msg" in item) {
+          const message = (item as { msg?: unknown }).msg;
+          return typeof message === "string" ? message : null;
+        }
+        return null;
+      })
+      .filter((message): message is string => Boolean(message));
+    return messages.length > 0 ? messages.join("; ") : null;
+  }
+  return null;
+}
+
 async function parseJson<T>(response: Response, message: string): Promise<T> {
   if (!response.ok) {
+    let detailMessage: string | null = null;
+    try {
+      detailMessage = apiDetailMessage(await response.clone().json());
+    } catch {
+      detailMessage = null;
+    }
     const authMessage =
       response.status === 401
         ? "Authentication required"
         : response.status === 403
           ? "You do not have access to this resource"
           : message;
-    throw new ApiError(`${authMessage}: ${response.status}`, response.status);
+    throw new ApiError(`${detailMessage ?? authMessage}: ${response.status}`, response.status);
   }
   return response.json() as Promise<T>;
 }
@@ -196,6 +287,18 @@ export async function createExport(
     body: JSON.stringify({ version_id: versionId, format }),
   });
   return parseJson<ExportJob>(response, "Failed to create export");
+}
+
+export async function queryStudyAgent(
+  apiClient: ApiClient,
+  payload: StudyAgentQueryPayload,
+): Promise<StudyAgentResult> {
+  const response = await fetch(`${API_BASE}/api/study-agent/query`, {
+    method: "POST",
+    headers: apiClient.headers({ "content-type": "application/json" }),
+    body: JSON.stringify(payload),
+  });
+  return parseJson<StudyAgentResult>(response, "Failed to query Study Agent");
 }
 
 export async function submitFeedback(
