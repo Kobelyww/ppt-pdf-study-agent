@@ -9,18 +9,22 @@
 - **记忆系统**：短期、长期、工作记忆三层架构
 - **自进化系统**：基于DSPy + GEPA的反射式进化优化
 - **多模态支持**：图表理解、公式识别、表格提取
-- **内部Beta产品闭环**：支持轻量用户上传PPT/PDF、查看处理任务、读取提纲/题目版本、提交反馈、创建导出任务，并对文档/任务/导出执行owner隔离。
+- **正式产品基础**：支持登录鉴权、owner隔离、审计查询、PostgreSQL/Redis/S3生产后端、Docker Compose和CI验证。
 
 ## 当前实现状态
 
-当前代码已进入 MVP-7 内部Beta阶段：
+当前代码已进入 MVP-8 Production Readiness Foundation 阶段：
 
 - FastAPI 提供 `/api/documents`、`/api/jobs`、`/api/exports`、`/api/feedback`、`/api/review-tasks` 等产品接口。
+- Auth API 提供 `/api/auth/login` 和 `/api/auth/me`，正式产品路径使用 Bearer token。
 - 数据库模型覆盖 documents、processing_jobs、content_versions、export_jobs、feedback、review_tasks、audit_events。
-- 本地 `StorageBackend` 用于上传文件、导出产物和测试环境对象存储。
+- 生产目标为 PostgreSQL；SQLite 仍用于单元测试和本地轻量路径。
+- `StorageBackend` 支持本地文件系统和 S3/MinIO，生产 profile 使用 S3-compatible backend。
+- 队列支持进程内测试队列和 Redis 稳定 JSON payload 队列，worker 可独立运行。
 - 前端 Vite/React 已切换为 API 驱动，支持用户切换、上传、状态查看、版本内容、反馈、导出和 review task 列表。
-- 内部Beta用户上下文通过 `x-user-id` 请求头传入；这是测试用轻量身份，不是正式认证系统。
+- `x-user-id` 只保留为 `ALLOW_DEV_USER_HEADER=true` 的开发/测试覆盖路径；production 必须关闭。
 - 审计事件会持久化关键动作，并过滤 raw content、token、secret、authorization 等敏感字段。
+- `/ready` 会检查 database、queue、storage，依赖不可用时返回 503。
 
 ## 快速开始
 
@@ -56,6 +60,21 @@ cd frontend
 VITE_API_BASE=http://localhost:8000 npm run dev
 ```
 
+### 生产化本地组合
+
+```bash
+cp .env.example .env
+# 将 .env 中 SECRET_KEY 改成强随机值，并确认 MinIO bucket `study-agent` 已创建
+docker compose config
+docker compose up --build
+```
+
+- `APP_ENV=production` 会强制 `ALLOW_DEV_USER_HEADER=false`，并要求 PostgreSQL、Redis、S3/MinIO 配置完整。
+- 空库首次启动会用 `BOOTSTRAP_ADMIN_EMAIL` 和 `BOOTSTRAP_ADMIN_PASSWORD` 创建首个 admin；已有用户时不会覆盖。
+- `CORS_ORIGINS` 控制前端 dev server 到 API 的跨端口访问，默认包含 `localhost:5173`。
+- Compose 不自动创建 MinIO bucket；bucket 缺失时 `/ready` 会保持 not ready。
+- 默认 compose 中的 `SECRET_KEY` placeholder 会被应用拒绝，正式启动前必须通过 `.env` 或环境变量覆盖。
+
 ## 项目结构
 
 ```
@@ -68,8 +87,8 @@ newtest/
 │   ├── knowledge/         # 知识处理
 │   ├── parsers/           # 文档解析
 │   ├── services/          # 服务层
-│   ├── storage/           # 本地对象存储抽象
-│   ├── workers/           # 内部处理/导出任务
+│   ├── storage/           # local 与 S3-compatible 对象存储抽象
+│   ├── workers/           # Redis payload worker 与内部处理/导出任务
 │   └── utils/             # 工具函数
 ├── frontend/              # React内部Beta工作台
 ├── tests/                 # 测试
@@ -104,13 +123,14 @@ npm ci
 npm run build
 ```
 
-## 内部Beta边界
+## 产品化边界
 
-- 当前 `x-user-id` 只用于内部Beta owner隔离测试，不代表真实认证/授权。
-- 当前队列是进程内/测试友好的实现，不是 Redis/Celery 生产队列。
-- 当前对象存储默认使用本地文件系统，不是 S3/MinIO 生产对象存储。
-- 当前前端用于内部产品闭环验证，不包含正式部署、计费、团队管理或企业级权限。
-- 自进化能力仍处于设计/实验边界，不作为 MVP-7 产品闭环的运行前置。
+- `x-user-id` 只用于 development/test override；production 必须使用登录 token。
+- 当前正式产品基础不包含企业 SSO、团队/组织租户、计费、配额或长期 refresh token。
+- Redis/S3/PostgreSQL 已作为生产基础路径接入，但云上高可用、备份、密钥轮换和IaC仍属于后续上线工程。
+- Compose 是 production-like 本地运行形态，不等同于云生产部署。
+- 自进化能力仍处于设计/实验边界，不作为 MVP-8 产品运行前置。
+- 普通 RAG、Graph RAG、Agentic RAG 的自动路由实验保留到 MVP-9，MVP-8 优先保证产品运行底座可靠。
 
 ### 代码格式化
 

@@ -5,9 +5,11 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from src.api.request_context import get_user_context
+from src.db.models import ExportJobRecord
 from src.security.audit import record_audit_event
 from src.services.export_service import ExportFormat, ExportService
 from src.services.version_service import ContentVersion
+from src.workers.queue import QueuePayload
 
 
 class ExportRequest(BaseModel):
@@ -61,6 +63,7 @@ def create_export(
                 "format": export_request.format.value,
             },
         )
+        _enqueue_export_job(request, job.id, context.user_id)
         return _export_payload(job)
 
     version = ContentVersion(
@@ -112,3 +115,32 @@ def _export_payload(job: Any) -> dict[str, Any]:
         "storage_uri": job.storage_uri,
         "error_message": job.error_message,
     }
+
+
+def _enqueue_export_job(request: Request, export_job_id: str, owner_id: str) -> None:
+    job_queue = getattr(request.app.state, "job_queue", None)
+    if job_queue is None:
+        return
+    payload = QueuePayload(
+        task_type="export",
+        owner_id=owner_id,
+        export_job_id=export_job_id,
+    )
+    try:
+        job_queue.enqueue(payload)
+    except Exception as exc:
+        _mark_export_failed(request, export_job_id=export_job_id, error_message=str(exc))
+        raise HTTPException(status_code=503, detail="Failed to enqueue export job") from exc
+
+
+def _mark_export_failed(request: Request, *, export_job_id: str, error_message: str) -> None:
+    export_service = request.app.state.export_service
+    session_factory = getattr(export_service, "session_factory", None)
+    if session_factory is None:
+        return
+    with session_factory() as session:
+        record = session.get(ExportJobRecord, export_job_id)
+        if record is not None:
+            record.status = "failed"
+            record.error_message = error_message
+            session.commit()

@@ -2,6 +2,7 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 from src.api.request_context import get_user_context
+from src.db.models import FeedbackRecord, ReviewTaskRecord, utc_now
 from src.security.audit import record_audit_event
 
 
@@ -25,6 +26,12 @@ def submit_feedback(request: Request, feedback_request: FeedbackRequest) -> dict
     feedback = request.app.state.feedback_service.submit_feedback(**payload)
     session_factory = _audit_session_factory(request)
     if session_factory is not None:
+        _persist_feedback_and_review_task(
+            session_factory=session_factory,
+            feedback_id=feedback.id,
+            owner_id=context.user_id,
+            feedback_request=feedback_request,
+        )
         record_audit_event(
             session_factory=session_factory,
             actor_id=context.user_id,
@@ -49,3 +56,40 @@ def submit_feedback(request: Request, feedback_request: FeedbackRequest) -> dict
 def _audit_session_factory(request: Request):
     document_service = getattr(request.app.state, "document_service", None)
     return getattr(document_service, "session_factory", None)
+
+
+def _persist_feedback_and_review_task(
+    *,
+    session_factory,
+    feedback_id: str,
+    owner_id: str,
+    feedback_request: FeedbackRequest,
+) -> None:
+    now = utc_now()
+    with session_factory() as session:
+        session.merge(
+            FeedbackRecord(
+                id=feedback_id,
+                owner_id=owner_id,
+                target_type=feedback_request.target_type,
+                target_id=feedback_request.target_id,
+                rating=feedback_request.rating,
+                reason=feedback_request.reason,
+                comment=feedback_request.comment,
+                created_at=now,
+            )
+        )
+        if feedback_request.rating <= 2:
+            session.merge(
+                ReviewTaskRecord(
+                    id=f"review:{feedback_id}",
+                    owner_id=owner_id,
+                    target_type=feedback_request.target_type,
+                    target_id=feedback_request.target_id,
+                    status="open",
+                    reason=feedback_request.reason,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+        session.commit()

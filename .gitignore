@@ -3,12 +3,14 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.codegraph/
 .venv/
 venv/
 .env
 
 frontend/node_modules/
 frontend/dist/
+frontend/.npm-cache/
 
 *.sqlite
 *.db

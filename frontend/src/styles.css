@@ -40,6 +40,47 @@ button:disabled {
   padding: 24px;
 }
 
+.login-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.login-panel {
+  width: min(420px, 100%);
+  padding: 24px;
+  border: 1px solid #d9e0ea;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 10px 30px rgb(20 32 48 / 8%);
+}
+
+.login-form {
+  display: grid;
+  gap: 14px;
+  margin-top: 22px;
+}
+
+.login-form label {
+  display: grid;
+  gap: 7px;
+  color: #344256;
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.login-form input {
+  min-height: 38px;
+  min-width: 0;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #18212f;
+}
+
 .workspace-header {
   display: flex;
   align-items: flex-end;
@@ -101,6 +142,16 @@ h3 {
   gap: 10px;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.session-box {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  color: #344256;
+  font-weight: 700;
 }
 
 .workspace-metrics span {
@@ -264,6 +315,10 @@ h3 {
   color: #8f3028;
   font-weight: 700;
   overflow-wrap: anywhere;
+}
+
+.error-banner.compact {
+  margin-top: 0;
 }
 
 .document-list {
@@ -639,6 +694,7 @@ dd {
     justify-content: stretch;
   }
 
+  .session-box,
   .workspace-metrics {
     justify-content: start;
   }

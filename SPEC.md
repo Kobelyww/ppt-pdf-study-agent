@@ -1,6 +1,30 @@
 # PPT/PDF转复习提纲和考试例题智能系统设计文档
 
-## 0. 当前实现状态：MVP-7 内部Beta产品闭环
+## 0. 当前实现状态：MVP-8 正式产品基础
+
+截至当前实现，项目已经从 MVP-7 内部Beta产品闭环推进到 MVP-8 Production Readiness Foundation。MVP-8 的目标不是继续扩大智能能力，而是先把正式产品运行底座补齐：身份、授权、数据库、队列、对象存储、健康检查、部署形态和CI。
+
+- **认证**：新增 `POST /api/auth/login` 和 `GET /api/auth/me`。正式产品路径使用 HMAC-signed JWT-shaped Bearer token；`x-user-id` 只允许在 `ALLOW_DEV_USER_HEADER=true` 的开发/测试模式作为 override。
+- **首个管理员**：production 空库启动时可通过 `BOOTSTRAP_ADMIN_EMAIL` 和 `BOOTSTRAP_ADMIN_PASSWORD` 创建首个 admin，已有用户时不会覆盖。
+- **前端跨域**：API 通过 `CORS_ORIGINS` 显式允许 Vite dev server 等前端 origin 发送 `Authorization` 请求。
+- **授权**：文档、任务、版本、导出、反馈、review task 和审计查询都以 authenticated user 为准。跨用户访问已有资源返回 `403`，不存在资源返回 `404`。
+- **数据库**：生产目标为 PostgreSQL，Alembic 迁移包含 users auth 字段、review/audit/job/document 常用查询索引；SQLite 仍用于快速单元测试。
+- **队列/Worker**：生产路径支持 Redis-backed stable JSON payload，worker 可独立运行；文档处理和导出任务带 owner 约束、失败落库、completed 幂等 guard 和 stale running job recovery。
+- **对象存储**：`StorageBackend` 支持 local 与 S3/MinIO-compatible backend。API 和 worker 通过 storage URI 交互，上传/导出对象 key 做安全化处理。
+- **可运维性**：`/health` 轻量返回组件状态，`/ready` 检查 database、queue、storage，依赖不可用时返回 `503`。
+- **部署**：`docker-compose.yml` 提供 API、worker、PostgreSQL(pgvector)、Redis、MinIO 的 production-like 本地组合；`.env.example` 记录必要变量。
+- **CI**：GitHub Actions 运行 backend `pytest -q`、`docker compose config` 和 frontend `npm run build`。
+- **RAG边界**：普通 RAG、Graph RAG、Agentic RAG 的自动路由实验保留到 MVP-9；MVP-8 只确保未来实验能落在可靠产品底座上。
+
+### 0.1 MVP-8 验收边界
+
+- 用户必须能通过登录 token 调用产品 API。
+- `APP_ENV=production` 必须禁止 `ALLOW_DEV_USER_HEADER`，并拒绝 placeholder `SECRET_KEY`。
+- Compose 不自动创建 MinIO bucket；bucket 缺失应让 `/ready` 失败，而不是静默降级。
+- Docker Compose 是 production-like 本地部署，不代表云上高可用生产部署。
+- 本阶段不包含企业 SSO、组织/租户管理、计费、refresh token、Kubernetes、Terraform 或云托管运维。
+
+## 0.2 历史基线：MVP-7 内部Beta产品闭环
 
 截至当前实现，项目已经从纯后端能力原型推进到内部Beta产品闭环：
 

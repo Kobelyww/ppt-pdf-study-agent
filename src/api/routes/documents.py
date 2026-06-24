@@ -130,6 +130,7 @@ async def create_document(
                             "title": upload.document.title,
                             "source_type": upload.document.source_type,
                         },
+                        owner_id=context.user_id,
                     )
                 )
             except Exception as exc:
@@ -170,12 +171,14 @@ async def create_document(
         )
     job_queue = getattr(request.app.state, "job_queue", None)
     if job_queue is not None:
+        context = get_user_context(request)
         try:
             job_queue.enqueue(
                 metadata_document_task(
                     job_id=result["job_id"],
                     document_id=result["document_id"],
                     metadata=metadata_payload,
+                    owner_id=context.user_id,
                 )
             )
         except Exception as exc:

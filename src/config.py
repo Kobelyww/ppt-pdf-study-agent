@@ -7,6 +7,103 @@ from dotenv import load_dotenv
 # 加载.env文件
 load_dotenv()
 
+DEV_SECRET_KEY = "dev-secret-change-me"
+EXAMPLE_PRODUCTION_SECRET_KEY = "change-me-super-secret-production-key"
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean value")
+
+
+def _env_csv(name: str, default: list[str]) -> list[str]:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+@dataclass
+class ProductConfig:
+    app_env: str = "development"
+    secret_key: str = DEV_SECRET_KEY
+    allow_dev_user_header: bool = True
+    database_url: str = "sqlite:///./study_agent.db"
+    queue_backend: str = "memory"
+    redis_url: str = ""
+    storage_backend: str = "local"
+    local_storage_root: str = "./data/storage"
+    s3_endpoint_url: str = ""
+    s3_bucket: str = ""
+    s3_region: str = "us-east-1"
+    s3_access_key_id: str = ""
+    s3_secret_access_key: str = ""
+    s3_secure: bool = False
+    bootstrap_admin_email: str = ""
+    bootstrap_admin_password: str = ""
+    cors_origins: list[str] = field(default_factory=lambda: ["http://localhost:5173"])
+
+    def validate_production(self) -> None:
+        if self.app_env.strip().lower() != "production":
+            return
+        if self.allow_dev_user_header:
+            raise ValueError("ALLOW_DEV_USER_HEADER must be disabled in production")
+        if self.secret_key.strip() in {DEV_SECRET_KEY, EXAMPLE_PRODUCTION_SECRET_KEY}:
+            raise ValueError("SECRET_KEY must not use a placeholder in production")
+        required = {
+            "SECRET_KEY": self.secret_key,
+            "DATABASE_URL": self.database_url,
+            "REDIS_URL": self.redis_url,
+            "S3_ENDPOINT_URL": self.s3_endpoint_url,
+            "S3_BUCKET": self.s3_bucket,
+            "S3_ACCESS_KEY_ID": self.s3_access_key_id,
+            "S3_SECRET_ACCESS_KEY": self.s3_secret_access_key,
+            "BOOTSTRAP_ADMIN_EMAIL": self.bootstrap_admin_email,
+            "BOOTSTRAP_ADMIN_PASSWORD": self.bootstrap_admin_password,
+        }
+        missing = [name for name, value in required.items() if not value.strip()]
+        if missing:
+            raise ValueError(f"Missing production config: {', '.join(missing)}")
+        if self.queue_backend != "redis":
+            raise ValueError("QUEUE_BACKEND must be redis in production")
+        if self.storage_backend != "s3":
+            raise ValueError("STORAGE_BACKEND must be s3 in production")
+
+
+def load_product_config() -> ProductConfig:
+    app_env = os.getenv("APP_ENV", "development").strip().lower()
+    config = ProductConfig(
+        app_env=app_env,
+        secret_key=os.getenv("SECRET_KEY", "" if app_env == "production" else DEV_SECRET_KEY),
+        allow_dev_user_header=_env_bool("ALLOW_DEV_USER_HEADER", True),
+        database_url=os.getenv(
+            "DATABASE_URL",
+            "" if app_env == "production" else "sqlite:///./study_agent.db",
+        ),
+        queue_backend=os.getenv("QUEUE_BACKEND", "memory"),
+        redis_url=os.getenv("REDIS_URL", ""),
+        storage_backend=os.getenv("STORAGE_BACKEND", "local"),
+        local_storage_root=os.getenv("LOCAL_STORAGE_ROOT", "./data/storage"),
+        s3_endpoint_url=os.getenv("S3_ENDPOINT_URL", ""),
+        s3_bucket=os.getenv("S3_BUCKET", ""),
+        s3_region=os.getenv("S3_REGION", "us-east-1"),
+        s3_access_key_id=os.getenv("S3_ACCESS_KEY_ID", ""),
+        s3_secret_access_key=os.getenv("S3_SECRET_ACCESS_KEY", ""),
+        s3_secure=_env_bool("S3_SECURE", False),
+        bootstrap_admin_email=os.getenv("BOOTSTRAP_ADMIN_EMAIL", ""),
+        bootstrap_admin_password=os.getenv("BOOTSTRAP_ADMIN_PASSWORD", ""),
+        cors_origins=_env_csv("CORS_ORIGINS", ["http://localhost:5173"]),
+    )
+    config.validate_production()
+    return config
+
 class TaskCategory(Enum):
     """任务类别"""
     # MiMo V2.5 擅长的任务（多模态、视觉理解）

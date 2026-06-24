@@ -18,3 +18,19 @@ class PermissionService:
         if action not in self.OWNER_ACTIONS:
             return False
         return actor_id == resource.owner_id
+
+
+@dataclass(frozen=True)
+class Actor:
+    id: str
+    role: str
+
+
+def can_view_review_task(*, actor: Actor, owner_id: str, assignee: str | None) -> bool:
+    if actor.role == "admin":
+        return True
+    if actor.id == owner_id:
+        return True
+    if actor.role == "reviewer" and assignee == actor.id:
+        return True
+    return False

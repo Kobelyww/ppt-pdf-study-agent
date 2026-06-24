@@ -6,10 +6,11 @@ interface DocumentsPageProps {
   isLoading: boolean;
   isUploading: boolean;
   selectedDocumentId: string;
-  userId: string;
+  allowDevUserSwitcher: boolean;
+  devUserId: string;
   onSelectDocument: (documentId: string) => void;
   onUpload: (file: File) => Promise<void>;
-  onUserIdChange: (userId: string) => void;
+  onDevUserIdChange: (userId: string) => void;
 }
 
 const statusLabels: Record<string, string> = {
@@ -41,10 +42,11 @@ function DocumentsPage({
   isLoading,
   isUploading,
   selectedDocumentId,
-  userId,
+  allowDevUserSwitcher,
+  devUserId,
   onSelectDocument,
   onUpload,
-  onUserIdChange,
+  onDevUserIdChange,
 }: DocumentsPageProps) {
   const [file, setFile] = useState<File | null>(null);
 
@@ -65,15 +67,17 @@ function DocumentsPage({
         </div>
       </div>
 
-      <label className="user-switcher" htmlFor="user-id">
-        <span>Current user</span>
-        <input
-          id="user-id"
-          type="text"
-          value={userId}
-          onChange={(event) => onUserIdChange(event.target.value || "demo-user")}
-        />
-      </label>
+      {allowDevUserSwitcher ? (
+        <label className="user-switcher" htmlFor="user-id">
+          <span>Development user override</span>
+          <input
+            id="user-id"
+            type="text"
+            value={devUserId}
+            onChange={(event) => onDevUserIdChange(event.target.value || "demo-user")}
+          />
+        </label>
+      ) : null}
 
       <form className="upload-strip" aria-label="Upload document" onSubmit={handleSubmit}>
         <label htmlFor="document-upload">Add PDF or PPTX</label>

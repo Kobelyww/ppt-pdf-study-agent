@@ -12,6 +12,7 @@ from .models import (
     ProcessingJob,
     QuestionRecord,
     ReviewTaskRecord,
+    UserRecord,
 )
 from .session import create_session_factory, get_engine
 
@@ -29,6 +30,7 @@ __all__ = [
     "ProcessingJob",
     "QuestionRecord",
     "ReviewTaskRecord",
+    "UserRecord",
     "create_session_factory",
     "get_engine",
 ]

@@ -10,6 +10,35 @@
 
 ---
 
+## Implementation Sync — 2026-06-23 Recovery Pass
+
+This plan is being implemented in the durable worktree `ppt-pdf-study-agent-mvp8` after an earlier temporary worktree was cleaned up. The original task sequence remains below for traceability, but the recovery implementation is consolidated rather than one commit per task.
+
+Current status:
+
+- [x] Task 1 Production Config Surface — `ProductConfig`, production fail-fast validation, `.env.example`.
+- [x] Task 2 User Model And Auth Service — `UserRecord`, password hashing, signed access tokens, auth migration.
+- [x] Task 3 Auth API And Request Context — login/me routes, bearer auth middleware, dev header gate.
+- [x] Task 4 Role-Aware Audit Query — admin-only `/api/audit-events` with filtering.
+- [x] Task 5 Reviewer Role Permissions — persisted review task visibility via owner/reviewer/admin policy.
+- [x] Task 6 Storage Backend Factory And S3 Backend — local/S3 factory, S3 contract, storage healthcheck.
+- [x] Task 7 Redis Queue Payloads And Worker Runner — stable queue payloads, Redis queue, worker runner, idempotent guards, stale job recovery.
+- [x] Task 8 Readiness Checks — `/ready` checks database, queue, storage. CORS and first-admin bootstrap are in place; structured logging remains a follow-up hardening item rather than a blocker for this recovery pass.
+- [ ] Task 9 Frontend Authentication Flow — in progress via frontend worker.
+- [x] Task 10 Docker Compose Production-Like Profile — API, worker, Postgres, Redis, MinIO, explicit production env.
+- [x] Task 11 GitHub Actions CI — backend tests, compose config, frontend build.
+- [x] Task 12 MVP-8 Product Smoke Test And Docs — authenticated product loop test and README/SPEC updates added; full verification still pending.
+
+Recovery verification recorded so far:
+
+- `pytest tests/test_mvp8_production_readiness.py -q`
+- `pytest tests/test_workers.py tests/test_workers_product_flow.py -q`
+- `pytest tests/test_api_documents.py tests/test_api_permissions_audit.py tests/test_db_migrations.py -q`
+- `pytest tests/test_mvp8_auth.py tests/test_mvp8_api_auth_audit.py tests/test_mvp8_storage_queue_infra.py -q` after compose update
+- `docker compose config`
+
+---
+
 ## File Structure
 
 Create or modify these files:
