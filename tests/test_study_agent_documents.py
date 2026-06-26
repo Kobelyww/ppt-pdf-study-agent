@@ -447,6 +447,9 @@ def test_index_service_summary_counts_statuses_and_fallback_reasons():
         "doc-indexed",
         "doc-missing",
     }
+    forbidden_keys = {"content", "snippet", "query", "answer", "token", "password", "secret"}
+    for document_status in summary["documents"]:
+        assert forbidden_keys.isdisjoint(document_status)
 
 
 def test_index_service_load_chunks_filters_owner_and_requested_documents():

@@ -264,7 +264,15 @@ def _study_index_payload(
     if service is None:
         return None
     try:
-        return service.status(owner_id=owner_id, document_id=document_id).to_dict()
+        status = service.status(owner_id=owner_id, document_id=document_id).to_dict()
+        return {
+            "document_id": status["document_id"],
+            "status": status["status"],
+            "artifact_id": status["artifact_id"],
+            "chunk_count": status["chunk_count"],
+            "indexed_at": status["indexed_at"],
+            "fallback_reason": status["fallback_reason"],
+        }
     except StudyAgentDocumentError:
         return None
 
