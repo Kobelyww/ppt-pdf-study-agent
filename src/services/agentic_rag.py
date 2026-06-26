@@ -16,10 +16,14 @@ class AgenticRAGPlan:
     reason: str
     steps: tuple[AgenticRAGStep, ...]
     estimated_cost: str
+    metadata: dict[str, int | bool] = field(default_factory=dict)
 
 
 class AgenticRAGPlanner:
-    def plan(self, query: str) -> AgenticRAGPlan:
+    def __init__(self, max_steps: int = 5) -> None:
+        self.max_steps = max(1, max_steps)
+
+    def plan(self, query: str, budget: str = "balanced") -> AgenticRAGPlan:
         query = query.strip()
         if not query:
             raise ValueError("query must not be empty")
@@ -30,21 +34,18 @@ class AgenticRAGPlanner:
         is_cross_chapter = any(keyword in query for keyword in ["第2章", "第4章", "跨章节", "综合"])
 
         steps = [
-            AgenticRAGStep("retrieve", "retrieve directly relevant chunks", {"query": query}),
+            AgenticRAGStep("retrieve", "retrieve directly relevant chunks"),
             AgenticRAGStep(
                 "expand",
                 "expand concepts through graph or prerequisites",
-                {"query": query},
             ),
             AgenticRAGStep(
                 "synthesize",
                 "merge evidence into a grounded response",
-                {"query": query},
             ),
             AgenticRAGStep(
                 "verify",
                 "check citations, missing concepts, and unsupported claims",
-                {"query": query},
             ),
         ]
 
@@ -53,10 +54,22 @@ class AgenticRAGPlanner:
                 AgenticRAGStep(
                     "generate_question",
                     "produce question, answer, and scoring rubric",
-                    {"query": query},
                 )
             )
 
+        planned_step_count = len(steps)
+        executed_steps = steps[: self.max_steps]
+        executed_step_count = len(executed_steps)
+        metadata = {
+            "planned_step_count": planned_step_count,
+            "executed_step_count": executed_step_count,
+            "step_budget_exhausted": executed_step_count < planned_step_count,
+        }
+        estimated_cost = (
+            "high"
+            if budget == "high" or executed_step_count >= 4
+            else "medium"
+        )
         reason = (
             "complex multi-step query"
             if is_cross_chapter or is_question_generation
@@ -65,6 +78,7 @@ class AgenticRAGPlanner:
         return AgenticRAGPlan(
             mode="agentic_rag",
             reason=reason,
-            steps=tuple(steps),
-            estimated_cost="high",
+            steps=tuple(executed_steps),
+            estimated_cost=estimated_cost,
+            metadata=metadata,
         )

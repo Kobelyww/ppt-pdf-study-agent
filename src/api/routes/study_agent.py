@@ -14,7 +14,7 @@ from src.security.audit import record_audit_event
 from src.services.study_agent_documents import StudyAgentDocumentError
 from src.services.study_agent_index import StudyDocumentIndexService
 from src.services.study_agent_runtime import StudyAgentRuntimeService
-from src.services.study_agent_trace import StudyAgentTraceService
+from src.services.study_agent_trace import StudyAgentTraceService, safe_policy_metadata
 
 
 class StudyAgentQueryRequest(BaseModel):
@@ -74,6 +74,12 @@ async def query_study_agent(
         trace_payload=trace_payload,
     )
     response_payload = _to_jsonable(result)
+    if isinstance(response_payload, dict):
+        response_payload.pop("audit_metadata", None)
+    audit_metadata = getattr(result, "audit_metadata", {}) or {}
+    policy = safe_policy_metadata(audit_metadata.get("policy"))
+    if policy is not None:
+        response_payload["policy"] = policy
     if trace_payload is not None:
         response_payload["trace"] = trace_payload
     return response_payload
@@ -185,7 +191,7 @@ def _trace_payload_without_persistence(
     latency_ms: int | float,
 ) -> dict[str, Any]:
     audit_metadata = getattr(result, "audit_metadata", {}) or {}
-    return {
+    trace_payload = {
         "trace_id": "trace-unpersisted",
         "request_id": request_id,
         "selected_mode": audit_metadata.get("mode"),
@@ -201,6 +207,10 @@ def _trace_payload_without_persistence(
         "needs_review": result.verification.needs_review,
         "latency_ms": latency_ms,
     }
+    policy = safe_policy_metadata(audit_metadata.get("policy"))
+    if policy is not None:
+        trace_payload["policy"] = policy
+    return trace_payload
 
 
 def _record_study_agent_audit(
@@ -217,17 +227,15 @@ def _record_study_agent_audit(
         return
 
     audit_metadata = getattr(result, "audit_metadata", {}) or {}
+    policy = safe_policy_metadata(audit_metadata.get("policy")) or {}
     metadata = {
         "trace_id": trace_payload.get("trace_id") if trace_payload else None,
-        "mode": audit_metadata.get("mode"),
-        "target": audit_metadata.get("target"),
+        "policy_version": policy.get("policy_version"),
+        "category": policy.get("category"),
+        "router_mode": policy.get("router_mode"),
+        "selected_mode": policy.get("selected_mode") or audit_metadata.get("mode"),
+        "policy_status": policy.get("status") or "not_applied",
         "needs_review": audit_metadata.get("needs_review"),
-        "source_count": audit_metadata.get("source_count"),
-        "chunk_count": audit_metadata.get("chunk_count"),
-        "document_count": len(payload.get("document_ids") or []),
-        "chunk_source": audit_metadata.get("chunk_source")
-        or (trace_payload or {}).get("chunk_source")
-        or "none",
         "fallback_reason": audit_metadata.get("fallback_reason")
         or (trace_payload or {}).get("fallback_reason")
         or "none",

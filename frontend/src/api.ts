@@ -129,6 +129,17 @@ export interface StudyAgentTraceSummary {
   latency_ms: number;
 }
 
+export interface StudyAgentPolicyDiagnostic {
+  policy_version?: string | null;
+  router_mode?: StudyRetrievalMode | null;
+  selected_mode?: StudyRetrievalMode | null;
+  category?: string | null;
+  status?: string | null;
+  readiness_status?: string | null;
+  blocked_reason?: string | null;
+  experiment_enabled?: boolean | null;
+}
+
 export interface StudyAgentResult {
   request: {
     query: string;
@@ -172,7 +183,8 @@ export interface StudyAgentResult {
     answer_term_recall: number;
   };
   trace?: StudyAgentTraceSummary;
-  audit_metadata: Record<string, unknown>;
+  policy?: StudyAgentPolicyDiagnostic | null;
+  audit_metadata?: Record<string, unknown>;
 }
 
 const API_BASE =

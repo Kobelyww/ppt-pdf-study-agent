@@ -13,6 +13,8 @@ PRIVATE_FIXTURE_KEYS = {
     "raw_content",
     "chunk_content",
     "source_snippet",
+    "prompt",
+    "hidden_reasoning",
     "password",
     "token",
     "secret",
@@ -26,6 +28,44 @@ REQUIRED_FIXTURE_KEYS = {
     "document_fixture_ids",
     "expected_sources",
     "expected_terms",
+    "expected_category",
+    "expected_router_mode",
+    "expected_selected_mode_when_ready",
+    "expected_selected_mode_when_not_ready",
+    "requires_persisted_chunks",
+    "max_allowed_cost",
+    "policy_notes",
+}
+
+ALLOWED_POLICY_CATEGORIES = {
+    "direct_lookup",
+    "definition",
+    "concept_relation",
+    "learning_path",
+    "multi_document_synthesis",
+    "question_generation",
+    "outline_fragment",
+}
+
+ALLOWED_POLICY_MODES = {
+    "simple_rag",
+    "graph_rag_lite",
+    "agentic_rag",
+}
+
+ALLOWED_POLICY_COSTS = {
+    "low",
+    "balanced",
+    "high",
+}
+
+ALLOWED_POLICY_STATUSES = {
+    "expected_ready_mode",
+    "expected_not_ready_mode",
+    "comparison_mode",
+    "matched",
+    "fallback",
+    "unknown",
 }
 
 
@@ -41,6 +81,13 @@ class RAGEvalCase:
     preferred_modes: list[str] = field(default_factory=list)
     budget: str = "balanced"
     ideal_answer: str | None = None
+    expected_category: str = ""
+    expected_router_mode: str = ""
+    expected_selected_mode_when_ready: str = ""
+    expected_selected_mode_when_not_ready: str = ""
+    requires_persisted_chunks: bool = False
+    max_allowed_cost: str = "balanced"
+    policy_notes: str = ""
 
 
 @dataclass
@@ -226,6 +273,7 @@ class RAGQualityEvaluationService:
             "case_count": len(cases),
             "scores": score_rows,
             "summary": summary,
+            "policy_summary": summarize_policy_statuses(score_rows),
             "readiness": readiness,
         }
 
@@ -377,6 +425,8 @@ def load_rag_eval_cases(path: str | Path) -> list[RAGEvalCase]:
                 f"{sorted(missing_keys)}"
             )
 
+        _validate_policy_fields(raw_case, raw_case.get("id", index))
+
         cases.append(
             RAGEvalCase(
                 id=raw_case["id"],
@@ -389,10 +439,79 @@ def load_rag_eval_cases(path: str | Path) -> list[RAGEvalCase]:
                 preferred_modes=list(raw_case.get("preferred_modes", [])),
                 budget=raw_case.get("budget", "balanced"),
                 ideal_answer=raw_case.get("ideal_answer"),
+                expected_category=raw_case["expected_category"],
+                expected_router_mode=raw_case["expected_router_mode"],
+                expected_selected_mode_when_ready=raw_case[
+                    "expected_selected_mode_when_ready"
+                ],
+                expected_selected_mode_when_not_ready=raw_case[
+                    "expected_selected_mode_when_not_ready"
+                ],
+                requires_persisted_chunks=raw_case["requires_persisted_chunks"],
+                max_allowed_cost=raw_case["max_allowed_cost"],
+                policy_notes=raw_case["policy_notes"],
             )
         )
 
     return cases
+
+
+def _validate_policy_fields(raw_case: dict, case_id: str | int) -> None:
+    _require_allowed_value(
+        raw_case,
+        case_id,
+        "category",
+        ALLOWED_POLICY_CATEGORIES,
+    )
+    _require_allowed_value(
+        raw_case,
+        case_id,
+        "expected_category",
+        ALLOWED_POLICY_CATEGORIES,
+    )
+    _require_allowed_value(
+        raw_case,
+        case_id,
+        "expected_router_mode",
+        ALLOWED_POLICY_MODES,
+    )
+    _require_allowed_value(
+        raw_case,
+        case_id,
+        "expected_selected_mode_when_ready",
+        ALLOWED_POLICY_MODES,
+    )
+    _require_allowed_value(
+        raw_case,
+        case_id,
+        "expected_selected_mode_when_not_ready",
+        ALLOWED_POLICY_MODES,
+    )
+    _require_allowed_value(
+        raw_case,
+        case_id,
+        "max_allowed_cost",
+        ALLOWED_POLICY_COSTS,
+    )
+    if raw_case["requires_persisted_chunks"] is not True and raw_case[
+        "requires_persisted_chunks"
+    ] is not False:
+        raise ValueError(
+            f"RAG evaluation case {case_id} has invalid requires_persisted_chunks"
+        )
+
+
+def _require_allowed_value(
+    raw_case: dict,
+    case_id: str | int,
+    field_name: str,
+    allowed_values: set[str],
+) -> None:
+    value = raw_case[field_name]
+    if not isinstance(value, str) or value not in allowed_values:
+        raise ValueError(
+            f"RAG evaluation case {case_id} has invalid {field_name}"
+        )
 
 
 def evaluate_route_readiness(summary: dict) -> dict[str, dict]:
@@ -549,7 +668,60 @@ def _score_row(case: RAGEvalCase, mode: str, score: RAGEvalScore) -> dict:
         "estimated_cost": score.token_cost,
         "needs_review": score.needs_review,
         "fallback_reason": score.fallback_reason,
+        "policy_status": _policy_status(case, mode),
+        "expected_category": case.expected_category,
+        "expected_router_mode": case.expected_router_mode,
+        "expected_selected_mode_when_ready": case.expected_selected_mode_when_ready,
+        "expected_selected_mode_when_not_ready": (
+            case.expected_selected_mode_when_not_ready
+        ),
+        "requires_persisted_chunks": case.requires_persisted_chunks,
+        "max_allowed_cost": case.max_allowed_cost,
     }
+
+
+def summarize_policy_statuses(rows: list[dict]) -> dict:
+    status_counts: dict[str, int] = defaultdict(int)
+    category_counts: dict[str, int] = defaultdict(int)
+    selected_mode_counts: dict[str, int] = defaultdict(int)
+
+    for row in rows:
+        status = _allowed_or_unknown(
+            row.get("policy_status") or row.get("status"),
+            ALLOWED_POLICY_STATUSES,
+        )
+        category = _allowed_or_unknown(
+            row.get("category") or row.get("expected_category"),
+            ALLOWED_POLICY_CATEGORIES,
+        )
+        selected_mode = _allowed_or_unknown(
+            row.get("selected_mode") or row.get("mode"),
+            ALLOWED_POLICY_MODES,
+        )
+        status_counts[status] += 1
+        category_counts[category] += 1
+        selected_mode_counts[selected_mode] += 1
+
+    return {
+        "case_count": len(rows),
+        "status_counts": dict(sorted(status_counts.items())),
+        "category_counts": dict(sorted(category_counts.items())),
+        "selected_mode_counts": dict(sorted(selected_mode_counts.items())),
+    }
+
+
+def _allowed_or_unknown(value, allowed_values: set[str]) -> str:
+    if isinstance(value, str) and value in allowed_values:
+        return value
+    return "unknown"
+
+
+def _policy_status(case: RAGEvalCase, mode: str) -> str:
+    if mode == case.expected_selected_mode_when_ready:
+        return "expected_ready_mode"
+    if mode == case.expected_selected_mode_when_not_ready:
+        return "expected_not_ready_mode"
+    return "comparison_mode"
 
 
 def _recorded_costs(scores: list[RAGModeScore]) -> list[int | float]:
@@ -615,5 +787,16 @@ def _markdown_report(payload: dict) -> str:
         lines.append(f"- {mode}: {readiness['overall']}")
         for category, status in readiness["by_category"].items():
             lines.append(f"  - {category}: {status}")
+
+    policy_summary = payload.get("policy_summary")
+    if policy_summary:
+        lines.extend(["", "## Policy Summary", ""])
+        lines.append(f"- Rows: {policy_summary['case_count']}")
+        lines.append("- Status counts:")
+        for status, count in policy_summary["status_counts"].items():
+            lines.append(f"  - {status}: {count}")
+        lines.append("- Category counts:")
+        for category, count in policy_summary["category_counts"].items():
+            lines.append(f"  - {category}: {count}")
 
     return "\n".join(lines) + "\n"

@@ -793,6 +793,37 @@ dd {
   letter-spacing: 0;
 }
 
+.study-agent-policy {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: -4px 0 4px;
+  color: #374151;
+  font-size: 0.85rem;
+}
+
+.study-agent-policy span {
+  min-width: 0;
+  padding: 6px 9px;
+  border: 1px solid #d8dee8;
+  border-radius: 6px;
+  background: #f8fafc;
+  overflow-wrap: anywhere;
+}
+
+.study-agent-policy strong {
+  color: #18212f;
+  font-weight: 700;
+}
+
+.study-agent-policy-warning {
+  border-color: #f5c451;
+  background: #fff8e6;
+  color: #92400e;
+  font-weight: 600;
+}
+
 .warning-banner {
   padding: 10px 12px;
   border: 1px solid #f5c451;

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import re
 from typing import Any
 
@@ -15,6 +15,10 @@ class GraphRAGResult:
     chunks: list[Chunk]
     confidence: float
     expanded_point_ids: list[str]
+    seed_count: int = 0
+    expanded_count: int = 0
+    hop_count: int = 0
+    metadata: dict[str, int | str | None] = field(default_factory=dict)
 
 
 class GraphRAGLiteRetriever:
@@ -28,13 +32,25 @@ class GraphRAGLiteRetriever:
         expanded = self._expand_neighbors(seeds, max_hops=max_hops)
         matched_chunks = self._recover_chunks(expanded, top_k=top_k)
         confidence = 0.0 if not matched_chunks else min(1.0, 0.4 + 0.2 * len(matched_chunks))
+        reason = self._result_reason(seeds=seeds, chunks=matched_chunks, top_k=top_k)
+        fallback_reason = None if matched_chunks else reason
+        metadata = {
+            "seed_count": len(seeds),
+            "expanded_count": len(expanded),
+            "hop_count": max_hops,
+            "fallback_reason": fallback_reason,
+        }
 
         return GraphRAGResult(
             mode="graph_rag_lite",
-            reason=self._result_reason(seeds=seeds, chunks=matched_chunks, top_k=top_k),
+            reason=reason,
             chunks=matched_chunks,
             confidence=confidence,
             expanded_point_ids=[point.id for point in expanded],
+            seed_count=len(seeds),
+            expanded_count=len(expanded),
+            hop_count=max_hops,
+            metadata=metadata,
         )
 
     def _match_seed_points(self, query: str) -> list[KnowledgePoint]:

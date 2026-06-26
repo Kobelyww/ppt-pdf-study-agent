@@ -55,6 +55,7 @@ class EvidenceBundle:
     confidence: float
     reason: str
     fallback_reason: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -307,6 +308,8 @@ class EvidenceCollector:
         if not chunks:
             return self._simple_bundle(request, fallback_reason=result.reason)
 
+        metadata = result.metadata.copy()
+        metadata["fallback_reason"] = None
         return EvidenceBundle(
             mode=RetrievalMode.GRAPH,
             chunks=tuple(chunks),
@@ -318,6 +321,7 @@ class EvidenceCollector:
                 if chunks
                 else result.reason
             ),
+            metadata=metadata,
         )
 
     async def _agentic_bundle(self, request: StudyRequest) -> EvidenceBundle:
@@ -327,10 +331,29 @@ class EvidenceCollector:
                 fallback_reason="low budget prevents agentic retrieval",
             )
 
-        self.agentic_planner.plan(request.query)
+        plan = self.agentic_planner.plan(request.query, budget=request.budget.value)
+        plan_metadata = plan.metadata.copy()
+        if plan_metadata.get("step_budget_exhausted") is True:
+            fallback_bundle = self._simple_bundle(
+                request,
+                fallback_reason="agentic step budget exhausted",
+            )
+            return EvidenceBundle(
+                mode=fallback_bundle.mode,
+                chunks=fallback_bundle.chunks,
+                sources=fallback_bundle.sources,
+                concept_ids=fallback_bundle.concept_ids,
+                confidence=fallback_bundle.confidence,
+                reason=fallback_bundle.reason,
+                fallback_reason=fallback_bundle.fallback_reason,
+                metadata=plan_metadata,
+            )
+
         if self.graph is not None:
             graph_bundle = await self._graph_bundle(request)
             if graph_bundle.mode == RetrievalMode.GRAPH and graph_bundle.chunks:
+                metadata = graph_bundle.metadata.copy()
+                metadata.update(plan_metadata)
                 return EvidenceBundle(
                     mode=RetrievalMode.AGENTIC,
                     chunks=graph_bundle.chunks,
@@ -338,9 +361,23 @@ class EvidenceCollector:
                     concept_ids=graph_bundle.concept_ids,
                     confidence=graph_bundle.confidence,
                     reason="agentic plan with graph-expanded evidence",
-                    fallback_reason=graph_bundle.fallback_reason,
+                    fallback_reason=None,
+                    metadata=metadata,
                 )
-        return self._simple_bundle(request, fallback_reason="agentic evidence unavailable")
+        fallback_bundle = self._simple_bundle(
+            request,
+            fallback_reason="agentic evidence unavailable",
+        )
+        return EvidenceBundle(
+            mode=fallback_bundle.mode,
+            chunks=fallback_bundle.chunks,
+            sources=fallback_bundle.sources,
+            concept_ids=fallback_bundle.concept_ids,
+            confidence=fallback_bundle.confidence,
+            reason=fallback_bundle.reason,
+            fallback_reason=fallback_bundle.fallback_reason,
+            metadata=plan_metadata,
+        )
 
     def _recover_chunks_by_concept_id(
         self,
@@ -428,19 +465,23 @@ class StudyAgentOrchestrator:
         evidence = await self.evidence_collector.collect(request, mode=plan.mode)
         draft = self.generator.generate(request, evidence)
         verification = self.verifier.verify(request, evidence, draft)
+        audit_metadata = {
+            "mode": plan.mode.value,
+            "target": request.target.value,
+            "needs_review": verification.needs_review,
+            "source_count": len(evidence.sources),
+            "chunk_count": len(evidence.chunks),
+        }
+        policy_decision = payload.get("policy_decision")
+        if isinstance(policy_decision, dict):
+            audit_metadata["policy"] = policy_decision
         return StudyAgentResult(
             request=request,
             plan=plan,
             evidence=evidence,
             draft=draft,
             verification=verification,
-            audit_metadata={
-                "mode": plan.mode.value,
-                "target": request.target.value,
-                "needs_review": verification.needs_review,
-                "source_count": len(evidence.sources),
-                "chunk_count": len(evidence.chunks),
-            },
+            audit_metadata=audit_metadata,
         )
 
     def _plan(self, request: StudyRequest) -> StudyPlan:

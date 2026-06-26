@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from sqlalchemy import create_engine, select
 
 from src.db import Base, StudyAgentTraceRecord, create_session_factory
@@ -18,6 +19,7 @@ from src.services.study_agent import (
     StudyVerification,
 )
 from src.services.study_agent_trace import StudyAgentTraceService
+from src.services.study_agent_trace import safe_policy_metadata
 
 
 def _session_factory():
@@ -251,3 +253,167 @@ def test_get_trace_is_scoped_to_owner_and_can_include_query_hash():
     assert owner_payload["query_hash"].startswith("sha256:")
     assert "什么是导数？" not in json.dumps(owner_payload, ensure_ascii=False)
     assert other_owner_payload is None
+
+
+def test_trace_serializes_safe_policy_subset():
+    SessionFactory = _session_factory()
+    service = StudyAgentTraceService(SessionFactory)
+    result = _study_result()
+    result.audit_metadata["policy"] = {
+        "selected_mode": "simple_rag",
+        "router_mode": "graph_rag_lite",
+        "effective_mode": "graph_rag_lite",
+        "category": "concept_relation",
+        "status": "blocked_by_flag",
+        "reason": "advanced routing is disabled",
+        "fallback_chain": ["simple_rag"],
+        "blocked_reason": "advanced routing is disabled",
+        "estimated_cost": "medium",
+        "experiment_enabled": False,
+        "policy_version": "rag-policy-v1",
+        "query": "什么是导数？",
+        "content": "导数描述函数变化率。",
+        "snippet": "函数变化率原文片段",
+        "token": "abc",
+        "password": "secret",
+    }
+
+    payload = service.record_success(
+        owner_id="owner-1",
+        request_id="req-policy",
+        result=result,
+        latency_ms=15.0,
+        index_statuses={},
+    )
+    trace = service.get_trace("owner-1", payload["trace_id"])
+
+    expected_policy = {
+        "selected_mode": "simple_rag",
+        "router_mode": "graph_rag_lite",
+        "effective_mode": "graph_rag_lite",
+        "category": "concept_relation",
+        "status": "blocked_by_flag",
+        "reason": "advanced routing is disabled",
+        "fallback_chain": ["simple_rag"],
+        "blocked_reason": "advanced routing is disabled",
+        "estimated_cost": "medium",
+        "experiment_enabled": False,
+        "policy_version": "rag-policy-v1",
+    }
+    assert payload["policy"] == expected_policy
+    assert trace is not None
+    assert trace["policy"] == expected_policy
+
+    with SessionFactory() as session:
+        record = session.scalar(select(StudyAgentTraceRecord))
+    serialized_record = json.dumps(
+        {
+            "trace_metadata": record.trace_metadata,
+            "selected_mode": record.selected_mode,
+            "route_reason": record.route_reason,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+    forbidden_values = [
+        "什么是导数？",
+        "导数描述函数变化率。",
+        "函数变化率原文片段",
+        "abc",
+        "secret",
+    ]
+    for value in forbidden_values:
+        assert value not in serialized_record
+
+    for key in ['"query"', '"content"', '"snippet"', '"token"', '"password"', '"secret"']:
+        assert key not in serialized_record.lower()
+
+
+def test_trace_policy_sanitizer_drops_sensitive_values_inside_allowed_keys():
+    SessionFactory = _session_factory()
+    service = StudyAgentTraceService(SessionFactory)
+    result = _study_result()
+    result.audit_metadata["policy"] = {
+        "selected_mode": "simple_rag",
+        "router_mode": "graph_rag_lite",
+        "effective_mode": "graph_rag_lite",
+        "category": "concept_relation",
+        "status": "blocked_by_flag",
+        "reason": "用户问：什么是导数？",
+        "fallback_chain": [
+            "graph_rag_lite",
+            "simple_rag",
+            "raw chunk content: 导数描述函数变化率。",
+        ],
+        "readiness_status": "hold because prompt leaked",
+        "blocked_reason": "secret-token abc",
+        "estimated_cost": "medium",
+        "experiment_enabled": False,
+        "policy_version": "rag-policy-v1",
+    }
+
+    payload = service.record_success(
+        owner_id="owner-1",
+        request_id="req-policy-sensitive",
+        result=result,
+        latency_ms=16.0,
+        index_statuses={},
+    )
+    trace = service.get_trace("owner-1", payload["trace_id"])
+
+    expected_policy = {
+        "selected_mode": "simple_rag",
+        "router_mode": "graph_rag_lite",
+        "effective_mode": "graph_rag_lite",
+        "category": "concept_relation",
+        "status": "blocked_by_flag",
+        "fallback_chain": ["graph_rag_lite", "simple_rag"],
+        "estimated_cost": "medium",
+        "experiment_enabled": False,
+        "policy_version": "rag-policy-v1",
+    }
+    assert payload["policy"] == expected_policy
+    assert trace is not None
+    assert trace["policy"] == expected_policy
+
+    with SessionFactory() as session:
+        record = session.scalar(select(StudyAgentTraceRecord))
+    serialized_record = json.dumps(record.trace_metadata, ensure_ascii=False, sort_keys=True)
+
+    for value in [
+        "什么是导数？",
+        "导数描述函数变化率。",
+        "raw chunk content",
+        "prompt leaked",
+        "secret-token",
+        "abc",
+    ]:
+        assert value not in serialized_record
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "graph_rag_lite is allowed by route policy",
+        "readiness snapshot is unavailable",
+        "agentic_rag requires high budget",
+        "agentic_rag is not candidate for question_generation",
+        "learning_path is not enabled",
+    ],
+)
+def test_policy_sanitizer_keeps_known_safe_policy_reasons(reason: str):
+    policy = safe_policy_metadata(
+        {
+            "selected_mode": "simple_rag",
+            "router_mode": "graph_rag_lite",
+            "category": "learning_path",
+            "status": "blocked_by_readiness",
+            "reason": reason,
+            "blocked_reason": reason,
+            "policy_version": "rag-policy-v1",
+        }
+    )
+
+    assert policy["reason"] == reason
+    assert policy["blocked_reason"] == reason
