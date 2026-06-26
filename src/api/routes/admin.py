@@ -28,7 +28,6 @@ def create_rag_evaluation(request: Request, payload: dict[str, Any]) -> dict[str
     fixture_path = Path("tests/fixtures/rag_eval_set.json")
     modes = payload.get("modes") or ["simple_rag", "graph_rag_lite", "agentic_rag"]
     service = RAGQualityEvaluationService(
-        report_dir=payload.get("report_dir") or "docs/evaluation",
         session_factory=session_factory,
         storage=storage,
     )

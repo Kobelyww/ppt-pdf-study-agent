@@ -418,7 +418,7 @@ def test_admin_rag_evaluation_api_creates_run(tmp_path: Path):
 
     response = client.post(
         "/api/admin/rag-evaluations",
-        json={"modes": ["simple_rag"], "report_dir": str(tmp_path / "reports")},
+        json={"modes": ["simple_rag"]},
         headers=headers,
     )
 
@@ -438,7 +438,7 @@ def test_admin_rag_evaluation_api_gets_run_metadata_and_requires_admin(tmp_path:
 
     created = client.post(
         "/api/admin/rag-evaluations",
-        json={"report_dir": str(tmp_path / "reports")},
+        json={},
         headers=admin_headers,
     )
     assert created.status_code == 200
@@ -481,6 +481,7 @@ def test_admin_rag_evaluation_api_stores_report_in_configured_storage(
     assert response.status_code == 200
     payload = response.json()
     assert payload["report_uri"].startswith("local://")
+    assert not (tmp_path / "reports").exists()
     report = document_service.storage.read_bytes(payload["report_uri"]).decode("utf-8")
     assert "Mode Comparison" in report
 
