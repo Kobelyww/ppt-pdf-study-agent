@@ -280,30 +280,33 @@ def test_rag_quality_observability_records_create_and_preserve_safe_metadata(tmp
             id="trace-1",
             owner_id="user-1",
             request_id="req-1",
+            query_hash="sha256:query",
+            target="exam_prep",
             document_ids=["doc-1", "doc-2"],
             selected_mode="hybrid",
-            query_hash="sha256:query",
+            route_reason="semantic_and_keyword_match",
+            estimated_cost=0.0125,
             fallback_chain=["hybrid", "keyword"],
-            retrieval_latency_ms=12.5,
-            generation_latency_ms=34.75,
-            total_latency_ms=47.25,
-            retrieved_chunk_count=8,
-            selected_chunk_count=4,
+            chunk_source="document_chunks",
+            fallback_reason="semantic_low_confidence",
+            source_count=8,
+            used_chunk_count=4,
+            confidence=0.86,
+            source_recall=0.75,
+            answer_term_recall=0.67,
             needs_review=True,
+            latency_ms=47.25,
             trace_metadata={"experiment": "rag-quality"},
         )
         run = RAGEvaluationRunRecord(
             id="eval-run-1",
             created_by="user-1",
-            status="completed",
-            document_ids=["doc-1"],
+            fixture_version="fixture-v1",
             modes=["semantic", "hybrid"],
             case_count=2,
+            status="completed",
             summary={"best_mode": "hybrid"},
-            average_relevance=0.91,
-            average_groundedness=0.82,
-            average_completeness=0.73,
-            average_latency_ms=50.5,
+            report_uri="local://reports/eval-run-1.json",
         )
         score = RAGEvaluationCaseScoreRecord(
             id="eval-score-1",
@@ -311,12 +314,14 @@ def test_rag_quality_observability_records_create_and_preserve_safe_metadata(tmp
             case_id="case-1",
             mode="hybrid",
             category="definition",
-            relevance=0.95,
-            groundedness=0.85,
-            completeness=0.75,
+            source_recall=0.95,
+            answer_term_recall=0.85,
+            answer_coverage=0.75,
             latency_ms=44.25,
-            retrieved_chunk_count=5,
-            selected_chunk_count=3,
+            estimated_cost=0.008,
+            needs_review=False,
+            fallback_reason="",
+            error_code="",
         )
         session.add_all([trace, run, score])
         session.commit()
@@ -327,20 +332,34 @@ def test_rag_quality_observability_records_create_and_preserve_safe_metadata(tmp
         score = session.get(RAGEvaluationCaseScoreRecord, "eval-score-1")
 
         assert trace is not None
+        assert trace.target == "exam_prep"
         assert trace.document_ids == ["doc-1", "doc-2"]
+        assert trace.route_reason == "semantic_and_keyword_match"
+        assert trace.estimated_cost == 0.0125
         assert trace.fallback_chain == ["hybrid", "keyword"]
+        assert trace.chunk_source == "document_chunks"
+        assert trace.fallback_reason == "semantic_low_confidence"
+        assert trace.source_count == 8
+        assert trace.used_chunk_count == 4
+        assert trace.confidence == 0.86
+        assert trace.source_recall == 0.75
+        assert trace.answer_term_recall == 0.67
         assert trace.trace_metadata == {"experiment": "rag-quality"}
         assert trace.needs_review is True
-        assert trace.total_latency_ms == 47.25
+        assert trace.latency_ms == 47.25
 
         assert run is not None
-        assert run.document_ids == ["doc-1"]
+        assert run.fixture_version == "fixture-v1"
         assert run.modes == ["semantic", "hybrid"]
         assert run.summary == {"best_mode": "hybrid"}
+        assert run.report_uri == "local://reports/eval-run-1.json"
         assert run.scores[0].id == "eval-score-1"
-        assert run.average_relevance == 0.91
 
         assert score is not None
         assert score.run_id == "eval-run-1"
         assert score.run.summary == {"best_mode": "hybrid"}
-        assert score.relevance == 0.95
+        assert score.source_recall == 0.95
+        assert score.answer_term_recall == 0.85
+        assert score.answer_coverage == 0.75
+        assert score.estimated_cost == 0.008
+        assert score.needs_review is False
