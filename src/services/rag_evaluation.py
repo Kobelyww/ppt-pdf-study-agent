@@ -1,7 +1,8 @@
 import json
 from collections import defaultdict
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
+from statistics import median
 from uuid import uuid4
 
 
@@ -44,7 +45,7 @@ class RAGEvalScore:
     answer_term_recall: float
     source_recall: float
     latency_ms: int | float
-    token_cost: int | float
+    token_cost: int | float | None
     answer_coverage: float = 1.0
     needs_review: bool = False
     fallback_reason: str | None = None
@@ -58,7 +59,7 @@ class RAGModeScore:
     answer_term_recall: float
     answer_coverage: float = 1.0
     latency_ms: int | float = 0
-    token_cost: int | float = 0
+    token_cost: int | float | None = 0
     needs_review: bool = False
     fallback_reason: str | None = None
 
@@ -70,7 +71,7 @@ class RAGEvaluationRun:
     fixture_version: str
     modes: list[str]
     case_count: int
-    scores: list[RAGModeScore]
+    scores: list[dict]
     summary: dict
     readiness: dict
     report_json_path: Path
@@ -92,7 +93,7 @@ class RAGEvaluationReport:
         source_recall: float,
         answer_term_recall: float,
         latency_ms: int | float = 0,
-        token_cost: int | float = 0,
+        token_cost: int | float | None = 0,
         answer_coverage: float = 1.0,
         needs_review: bool = False,
         fallback_reason: str | None = None,
@@ -129,7 +130,7 @@ class RAGEvaluator:
         answer: str | None,
         sources: list[str] | None,
         latency_ms: int | float,
-        token_cost: int | float,
+        token_cost: int | float | None,
         needs_review: bool = False,
         fallback_reason: str | None = None,
     ) -> RAGEvalScore:
@@ -182,6 +183,7 @@ class RAGQualityEvaluationService:
     ) -> RAGEvaluationRun:
         cases = load_rag_eval_cases(fixture_path)
         report = RAGEvaluationReport()
+        score_rows: list[dict] = []
 
         for case in cases:
             for mode in modes:
@@ -197,6 +199,7 @@ class RAGQualityEvaluationService:
                     needs_review=score.needs_review,
                     fallback_reason=score.fallback_reason,
                 )
+                score_rows.append(_score_row(case, mode, score))
 
         summary = report.summary()
         readiness = evaluate_route_readiness(summary)
@@ -210,7 +213,7 @@ class RAGQualityEvaluationService:
             "fixture_version": Path(fixture_path).name,
             "modes": list(modes),
             "case_count": len(cases),
-            "scores": [asdict(score) for score in report.scores],
+            "scores": score_rows,
             "summary": summary,
             "readiness": readiness,
         }
@@ -227,7 +230,7 @@ class RAGQualityEvaluationService:
             fixture_version=Path(fixture_path).name,
             modes=list(modes),
             case_count=len(cases),
-            scores=report.scores,
+            scores=score_rows,
             summary=summary,
             readiness=readiness,
             report_json_path=report_json_path,
@@ -362,7 +365,8 @@ def _category_readiness(
             and mode_summary["average_answer_term_recall"]
             >= simple_summary["average_answer_term_recall"] - 0.05
             and mode_summary["needs_review_rate"] <= simple_summary["needs_review_rate"] + 0.10
-            and mode_summary["average_latency_ms"] <= simple_summary["average_latency_ms"] * 2
+            and _metric(mode_summary, "median_latency_ms", "average_latency_ms")
+            <= _metric(simple_summary, "median_latency_ms", "average_latency_ms") * 2
         )
         return "candidate" if is_candidate else "hold"
 
@@ -376,6 +380,7 @@ def _category_readiness(
             )
             and mode_summary["needs_review_rate"] <= simple_summary["needs_review_rate"]
             and mode_summary["fallback_rate"] < 0.2
+            and mode_summary.get("estimated_cost_recorded_rate", 0.0) == 1.0
         )
         return "candidate" if is_candidate else "hold"
 
@@ -403,7 +408,11 @@ def _summarize_scores(scores: list[RAGModeScore]) -> dict:
         ),
         "average_answer_coverage": _average([score.answer_coverage for score in scores]),
         "average_latency_ms": _average([score.latency_ms for score in scores]),
-        "average_token_cost": _average([score.token_cost for score in scores]),
+        "median_latency_ms": _median([score.latency_ms for score in scores]),
+        "average_token_cost": _average(_recorded_costs(scores)),
+        "estimated_cost_recorded_rate": _average(
+            [1.0 if score.token_cost is not None else 0.0 for score in scores]
+        ),
         "case_count": len(scores),
         "needs_review_rate": _average([1.0 if score.needs_review else 0.0 for score in scores]),
         "fallback_rate": _average(
@@ -425,7 +434,11 @@ def _summarize_category_scores(scores: list[RAGModeScore]) -> dict:
         ),
         "average_answer_coverage": _average([score.answer_coverage for score in scores]),
         "average_latency_ms": _average([score.latency_ms for score in scores]),
-        "average_token_cost": _average([score.token_cost for score in scores]),
+        "median_latency_ms": _median([score.latency_ms for score in scores]),
+        "average_token_cost": _average(_recorded_costs(scores)),
+        "estimated_cost_recorded_rate": _average(
+            [1.0 if score.token_cost is not None else 0.0 for score in scores]
+        ),
         "case_count": len(scores),
         "needs_review_rate": _average([1.0 if score.needs_review else 0.0 for score in scores]),
         "fallback_rate": _average(
@@ -434,10 +447,39 @@ def _summarize_category_scores(scores: list[RAGModeScore]) -> dict:
     }
 
 
+def _score_row(case: RAGEvalCase, mode: str, score: RAGEvalScore) -> dict:
+    return {
+        "case_id": case.id,
+        "mode": mode,
+        "category": case.category,
+        "source_recall": score.source_recall,
+        "answer_term_recall": score.answer_term_recall,
+        "answer_coverage": score.answer_coverage,
+        "latency_ms": score.latency_ms,
+        "estimated_cost": score.token_cost,
+        "needs_review": score.needs_review,
+        "fallback_reason": score.fallback_reason,
+    }
+
+
+def _recorded_costs(scores: list[RAGModeScore]) -> list[int | float]:
+    return [score.token_cost for score in scores if score.token_cost is not None]
+
+
 def _average(values: list[int | float]) -> float:
     if not values:
         return 0.0
     return sum(values) / len(values)
+
+
+def _median(values: list[int | float]) -> float:
+    if not values:
+        return 0.0
+    return float(median(values))
+
+
+def _metric(summary: dict, primary_key: str, fallback_key: str) -> int | float:
+    return summary.get(primary_key, summary[fallback_key])
 
 
 def _terms_from_text(value: str | None) -> list[str]:

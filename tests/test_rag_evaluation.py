@@ -1,4 +1,7 @@
+import json
 from pathlib import Path
+
+import pytest
 
 from src.services.rag_evaluation import (
     RAGEvaluator,
@@ -157,6 +160,52 @@ def test_rag_evaluation_fixture_loads_expected_cases():
     assert all(case.expected_terms for case in cases)
 
 
+def test_rag_evaluation_fixture_rejects_private_keys(tmp_path):
+    fixture_path = tmp_path / "private_fixture.json"
+    fixture_path.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "private-001",
+                    "query": "what is private?",
+                    "target": "answer",
+                    "category": "definition",
+                    "document_fixture_ids": ["doc-1"],
+                    "expected_sources": ["doc:source"],
+                    "expected_terms": ["term"],
+                    "raw_content": "do not persist this",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="private keys"):
+        load_rag_eval_cases(fixture_path)
+
+
+def test_rag_evaluation_fixture_rejects_missing_required_fields(tmp_path):
+    fixture_path = tmp_path / "missing_required_fixture.json"
+    fixture_path.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "missing-001",
+                    "query": "what is missing?",
+                    "target": "answer",
+                    "category": "definition",
+                    "document_fixture_ids": ["doc-1"],
+                    "expected_sources": ["doc:source"],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="missing keys"):
+        load_rag_eval_cases(fixture_path)
+
+
 def test_rag_quality_evaluation_service_runs_modes_and_writes_reports(tmp_path):
     fixture_path = Path(__file__).parent / "fixtures" / "rag_eval_set.json"
     service = RAGQualityEvaluationService(report_dir=tmp_path)
@@ -172,7 +221,27 @@ def test_rag_quality_evaluation_service_runs_modes_and_writes_reports(tmp_path):
     assert set(run.modes) == {"simple_rag", "graph_rag_lite"}
     assert run.summary["simple_rag"]["case_count"] == 4
     assert run.summary["graph_rag_lite"]["case_count"] == 4
+    assert len(run.scores) == run.case_count * len(run.modes)
+
+    expected_score_keys = {
+        "case_id",
+        "mode",
+        "category",
+        "source_recall",
+        "answer_term_recall",
+        "answer_coverage",
+        "latency_ms",
+        "estimated_cost",
+        "needs_review",
+        "fallback_reason",
+    }
+    assert all(isinstance(score, dict) for score in run.scores)
+    assert all(expected_score_keys.issubset(score) for score in run.scores)
+
     assert run.report_json_path.exists()
+    payload = json.loads(run.report_json_path.read_text(encoding="utf-8"))
+    assert len(payload["scores"]) == run.case_count * len(run.modes)
+    assert all(expected_score_keys.issubset(score) for score in payload["scores"])
     assert run.report_markdown_path.exists()
     assert "Mode Comparison" in run.report_markdown_path.read_text(encoding="utf-8")
 
