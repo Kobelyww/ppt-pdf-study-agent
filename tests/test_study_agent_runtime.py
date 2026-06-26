@@ -7,7 +7,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from src.db.models import Base, Document, DocumentArtifactRecord
+from src.db.models import Base, Document, DocumentArtifactRecord, DocumentChunkRecord
 from src.services.rag_router import RetrievalMode
 from src.services.study_agent_documents import StudyAgentDocumentError, StudyDocumentChunker
 from src.services.study_agent_runtime import StudyAgentRuntimeService
@@ -59,6 +59,41 @@ def _insert_ready_document_with_artifact(
         session.commit()
 
 
+def _insert_persisted_chunk(
+    Session,
+    *,
+    document_id: str = "doc-study",
+    owner_id: str = "user-1",
+    artifact_id: str = "artifact-doc-study",
+    content: str = "Persisted derivatives evidence.",
+) -> None:
+    with Session() as session:
+        session.add(
+            DocumentChunkRecord(
+                id=f"chunk-{document_id}",
+                owner_id=owner_id,
+                document_id=document_id,
+                artifact_id=artifact_id,
+                chunk_index=0,
+                chunk_count=1,
+                source=f"document:{document_id}:chunk:0",
+                content=content,
+                chunk_metadata={
+                    "owner_id": owner_id,
+                    "document_id": document_id,
+                    "document_title": "Calculus Notes",
+                    "artifact_id": artifact_id,
+                    "artifact_type": "normalized_document",
+                    "chunk_index": 0,
+                    "chunk_count": 1,
+                    "source_kind": "persisted_document_chunk",
+                },
+                content_hash=f"hash-{document_id}",
+            )
+        )
+        session.commit()
+
+
 @pytest.mark.asyncio
 async def test_runtime_runs_study_agent_against_real_document_artifact():
     Session = _session_factory()
@@ -86,6 +121,114 @@ async def test_runtime_runs_study_agent_against_real_document_artifact():
     assert "Derivatives measure instantaneous rate of change." in result.draft.content
     assert result.verification.needs_review is False
     assert result.audit_metadata["chunk_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_runtime_prefers_persisted_chunks_over_query_time_chunking():
+    Session = _session_factory()
+    _insert_ready_document_with_artifact(
+        Session,
+        content="Artifact text that should not appear when persisted chunks exist.",
+    )
+    _insert_persisted_chunk(Session)
+    runtime = StudyAgentRuntimeService(
+        session_factory=Session,
+        chunker=StudyDocumentChunker(max_chars=200, overlap_chars=20),
+    )
+
+    result = await runtime.run(
+        {
+            "query": "What do derivatives measure?",
+            "target": "answer",
+            "document_ids": ["doc-study"],
+            "authenticated_user_id": "user-1",
+            "request_id": "req-runtime-persisted",
+        }
+    )
+
+    assert result.evidence.sources == ("document:doc-study:chunk:0",)
+    assert result.evidence.chunks[0].content == "Persisted derivatives evidence."
+    assert result.evidence.chunks[0].metadata["source_kind"] == "persisted_document_chunk"
+    assert result.audit_metadata["chunk_source"] == "persisted"
+    assert result.audit_metadata["fallback_reason"] is None
+
+
+@pytest.mark.asyncio
+async def test_runtime_fallback_to_artifact_chunking_is_observable():
+    Session = _session_factory()
+    _insert_ready_document_with_artifact(Session)
+    runtime = StudyAgentRuntimeService(
+        session_factory=Session,
+        chunker=StudyDocumentChunker(max_chars=200, overlap_chars=20),
+    )
+
+    result = await runtime.run(
+        {
+            "query": "What do derivatives measure?",
+            "target": "answer",
+            "document_ids": ["doc-study"],
+            "authenticated_user_id": "user-1",
+            "request_id": "req-runtime-fallback",
+        }
+    )
+
+    assert result.evidence.chunks[0].metadata["source_kind"] == "normalized_document"
+    assert result.audit_metadata["chunk_source"] == "fallback"
+    assert result.audit_metadata["fallback_reason"] == "persisted_chunks_missing"
+
+
+@pytest.mark.asyncio
+async def test_runtime_falls_back_when_any_requested_document_lacks_persisted_chunks():
+    Session = _session_factory()
+    _insert_ready_document_with_artifact(Session, document_id="doc-study")
+    _insert_ready_document_with_artifact(
+        Session,
+        document_id="doc-second",
+        content="Integrals accumulate signed area.",
+    )
+    _insert_persisted_chunk(Session, document_id="doc-study")
+    runtime = StudyAgentRuntimeService(
+        session_factory=Session,
+        chunker=StudyDocumentChunker(max_chars=200, overlap_chars=20),
+    )
+
+    result = await runtime.run(
+        {
+            "query": "What do derivatives measure?",
+            "target": "answer",
+            "document_ids": ["doc-study", "doc-second"],
+            "authenticated_user_id": "user-1",
+            "request_id": "req-runtime-partial-fallback",
+        }
+    )
+
+    assert result.audit_metadata["chunk_source"] == "fallback"
+    assert result.audit_metadata["fallback_reason"] == "persisted_chunks_incomplete"
+
+
+@pytest.mark.asyncio
+async def test_runtime_falls_back_when_persisted_chunks_are_stale():
+    Session = _session_factory()
+    _insert_ready_document_with_artifact(Session)
+    _insert_persisted_chunk(Session, artifact_id="artifact-old")
+    runtime = StudyAgentRuntimeService(
+        session_factory=Session,
+        chunker=StudyDocumentChunker(max_chars=200, overlap_chars=20),
+    )
+
+    result = await runtime.run(
+        {
+            "query": "What do derivatives measure?",
+            "target": "answer",
+            "document_ids": ["doc-study"],
+            "authenticated_user_id": "user-1",
+            "request_id": "req-runtime-stale-fallback",
+        }
+    )
+
+    assert result.evidence.chunks[0].metadata["source_kind"] == "normalized_document"
+    assert result.audit_metadata["chunk_source"] == "fallback"
+    assert result.audit_metadata["fallback_reason"] == "persisted_chunks_stale"
 
 
 @pytest.mark.asyncio

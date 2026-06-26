@@ -20,6 +20,7 @@ from src.services.study_agent_documents import (
     StudyDocumentEvidence,
     StudyDocumentEvidenceSource,
 )
+from src.services.study_agent_index import StudyDocumentIndexService
 
 
 class StudyAgentRuntimeService:
@@ -29,6 +30,7 @@ class StudyAgentRuntimeService:
         session_factory,
         evidence_source: StudyDocumentEvidenceSource | None = None,
         chunker: StudyDocumentChunker | None = None,
+        index_service: StudyDocumentIndexService | None = None,
         graph: KnowledgeGraph | None = None,
         graph_factory: Callable[[tuple[StudyDocumentEvidence, ...]], KnowledgeGraph | None]
         | None = None,
@@ -41,6 +43,10 @@ class StudyAgentRuntimeService:
         self.session_factory = session_factory
         self.evidence_source = evidence_source or StudyDocumentEvidenceSource(session_factory)
         self.chunker = chunker or StudyDocumentChunker()
+        self.index_service = index_service or StudyDocumentIndexService(
+            session_factory=session_factory,
+            chunker=self.chunker,
+        )
         self.graph = graph
         self.graph_factory = graph_factory
         self.agentic_planner = agentic_planner
@@ -62,7 +68,44 @@ class StudyAgentRuntimeService:
             owner_id=request.authenticated_user_id,
             document_ids=request.document_ids,
         )
-        chunks = self.chunker.chunk(evidence)
+        persisted_chunks = self.index_service.load_chunks(
+            owner_id=request.authenticated_user_id,
+            document_ids=request.document_ids,
+        )
+        requested_artifact_by_document_id = {
+            item.document_id: item.artifact_id for item in evidence
+        }
+        requested_document_ids = set(requested_artifact_by_document_id)
+        persisted_document_ids = {
+            str(chunk.get("metadata", {}).get("document_id"))
+            for chunk in persisted_chunks
+        }
+        stale_document_ids = {
+            document_id
+            for document_id, artifact_id in requested_artifact_by_document_id.items()
+            if any(
+                str(chunk.get("metadata", {}).get("document_id")) == document_id
+                and str(chunk.get("metadata", {}).get("artifact_id")) != artifact_id
+                for chunk in persisted_chunks
+            )
+        }
+        if (
+            requested_document_ids
+            and requested_document_ids <= persisted_document_ids
+            and not stale_document_ids
+        ):
+            chunks = list(persisted_chunks)
+            chunk_source = "persisted"
+            fallback_reason = None
+        else:
+            chunks = self.chunker.chunk(evidence)
+            chunk_source = "fallback"
+            if not persisted_document_ids:
+                fallback_reason = "persisted_chunks_missing"
+            elif stale_document_ids:
+                fallback_reason = "persisted_chunks_stale"
+            else:
+                fallback_reason = "persisted_chunks_incomplete"
         if not chunks:
             raise StudyAgentDocumentError(
                 status_code=422,
@@ -84,7 +127,10 @@ class StudyAgentRuntimeService:
             verifier=self.verifier,
             router=self.router,
         )
-        return await orchestrator.run(payload)
+        result = await orchestrator.run(payload)
+        result.audit_metadata["chunk_source"] = chunk_source
+        result.audit_metadata["fallback_reason"] = fallback_reason
+        return result
 
     def _graph_for(self, evidence: tuple[StudyDocumentEvidence, ...]) -> KnowledgeGraph | None:
         if self.graph_factory is not None:
