@@ -38,6 +38,7 @@ class RAGReadinessSnapshot:
 class RAGRoutePolicyDecision:
     selected_mode: RetrievalMode
     router_mode: RetrievalMode
+    effective_mode: RetrievalMode
     category: str
     status: str
     reason: str
@@ -52,6 +53,7 @@ class RAGRoutePolicyDecision:
         return {
             "selected_mode": self.selected_mode.value,
             "router_mode": self.router_mode.value,
+            "effective_mode": self.effective_mode.value,
             "category": self.category,
             "status": self.status,
             "reason": self.reason,
@@ -77,14 +79,16 @@ class RAGRoutePolicyService:
         budget: str,
         preferred_mode: RetrievalMode | None = None,
     ) -> RAGRoutePolicyDecision:
-        router_mode = self._effective_router_mode(router_decision.mode, preferred_mode)
+        router_mode = router_decision.mode
+        effective_mode = self._effective_router_mode(router_mode, preferred_mode)
         category = router_decision.category
-        fallback_chain = self._fallback_chain(router_mode)
+        fallback_chain = self._fallback_chain(effective_mode)
 
-        if router_mode == RetrievalMode.SIMPLE:
+        if effective_mode == RetrievalMode.SIMPLE:
             return self._decision(
                 selected_mode=RetrievalMode.SIMPLE,
                 router_mode=router_mode,
+                effective_mode=effective_mode,
                 category=category,
                 status="allowed",
                 reason="simple_rag is always allowed",
@@ -96,24 +100,25 @@ class RAGRoutePolicyService:
             )
 
         blocked = self._blocked_reason(
-            mode=router_mode,
+            mode=effective_mode,
             category=category,
             readiness=readiness,
             index_statuses=index_statuses,
             budget=budget,
         )
-        readiness_status = readiness.status_for(router_mode, category) if readiness else None
+        readiness_status = readiness.status_for(effective_mode, category) if readiness else None
 
         if blocked is not None:
             status, reason = blocked
             selected_mode = (
                 RetrievalMode.SIMPLE
                 if self.config.fallback_to_simple_on_block
-                else router_mode
+                else effective_mode
             )
             return self._decision(
                 selected_mode=selected_mode,
                 router_mode=router_mode,
+                effective_mode=effective_mode,
                 category=category,
                 status=status,
                 reason=reason,
@@ -125,11 +130,12 @@ class RAGRoutePolicyService:
             )
 
         return self._decision(
-            selected_mode=router_mode,
+            selected_mode=effective_mode,
             router_mode=router_mode,
+            effective_mode=effective_mode,
             category=category,
             status="allowed",
-            reason=f"{router_mode.value} is allowed by route policy",
+            reason=f"{effective_mode.value} is allowed by route policy",
             fallback_chain=fallback_chain,
             readiness_status=readiness_status,
             blocked_reason=None,
@@ -186,6 +192,12 @@ class RAGRoutePolicyService:
                 f"agentic_rag requires {self.config.max_budget_for_agentic} budget",
             )
 
+        if self.config.require_persisted_chunks_for_advanced and not index_statuses:
+            return (
+                "blocked_by_index_health",
+                "persisted chunks are required for advanced routing",
+            )
+
         index_statuses = index_statuses or {}
         unhealthy = [
             payload.get("status")
@@ -212,6 +224,7 @@ class RAGRoutePolicyService:
         *,
         selected_mode: RetrievalMode,
         router_mode: RetrievalMode,
+        effective_mode: RetrievalMode,
         category: QueryCategory,
         status: str,
         reason: str,
@@ -224,6 +237,7 @@ class RAGRoutePolicyService:
         return RAGRoutePolicyDecision(
             selected_mode=selected_mode,
             router_mode=router_mode,
+            effective_mode=effective_mode,
             category=category.value,
             status=status,
             reason=reason,

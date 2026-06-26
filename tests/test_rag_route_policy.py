@@ -184,6 +184,98 @@ def test_index_health_blocks_advanced_when_persisted_chunks_required():
     assert decision.blocked_reason == "persisted chunks are required for advanced routing"
 
 
+def test_missing_index_health_blocks_advanced_when_persisted_chunks_required():
+    service = RAGRoutePolicyService(
+        RAGRoutePolicyConfig(
+            advanced_routing_enabled=True,
+            graph_rag_enabled=True,
+            enabled_categories=frozenset({"learning_path"}),
+        )
+    )
+
+    decision = service.decide(
+        router_decision=_decision(RetrievalMode.GRAPH, QueryCategory.LEARNING_PATH),
+        readiness=_snapshot(),
+        index_statuses=None,
+        budget="medium",
+    )
+
+    assert decision.selected_mode == RetrievalMode.SIMPLE
+    assert decision.status == "blocked_by_index_health"
+    assert decision.blocked_reason == "persisted chunks are required for advanced routing"
+
+
+def test_empty_index_health_blocks_advanced_when_persisted_chunks_required():
+    service = RAGRoutePolicyService(
+        RAGRoutePolicyConfig(
+            advanced_routing_enabled=True,
+            graph_rag_enabled=True,
+            enabled_categories=frozenset({"learning_path"}),
+        )
+    )
+
+    decision = service.decide(
+        router_decision=_decision(RetrievalMode.GRAPH, QueryCategory.LEARNING_PATH),
+        readiness=_snapshot(),
+        index_statuses={},
+        budget="medium",
+    )
+
+    assert decision.selected_mode == RetrievalMode.SIMPLE
+    assert decision.effective_mode == RetrievalMode.GRAPH
+    assert decision.status == "blocked_by_index_health"
+    assert decision.blocked_reason == "persisted chunks are required for advanced routing"
+
+
+def test_allowed_user_preference_preserves_router_recommendation_in_diagnostics():
+    service = RAGRoutePolicyService(
+        RAGRoutePolicyConfig(
+            advanced_routing_enabled=True,
+            graph_rag_enabled=True,
+            enabled_categories=frozenset({"learning_path"}),
+            allow_user_preferred_mode=True,
+        )
+    )
+
+    decision = service.decide(
+        router_decision=_decision(RetrievalMode.SIMPLE, QueryCategory.LEARNING_PATH),
+        readiness=_snapshot(),
+        index_statuses=_index_status(),
+        budget="medium",
+        preferred_mode=RetrievalMode.GRAPH,
+    )
+
+    assert decision.selected_mode == RetrievalMode.GRAPH
+    assert decision.router_mode == RetrievalMode.SIMPLE
+    assert decision.effective_mode == RetrievalMode.GRAPH
+    assert decision.status == "allowed"
+
+
+def test_blocked_user_preference_exposes_effective_mode_in_diagnostics():
+    service = RAGRoutePolicyService(
+        RAGRoutePolicyConfig(
+            advanced_routing_enabled=True,
+            graph_rag_enabled=False,
+            enabled_categories=frozenset({"learning_path"}),
+            allow_user_preferred_mode=True,
+        )
+    )
+
+    decision = service.decide(
+        router_decision=_decision(RetrievalMode.SIMPLE, QueryCategory.LEARNING_PATH),
+        readiness=_snapshot(),
+        index_statuses=_index_status(),
+        budget="medium",
+        preferred_mode=RetrievalMode.GRAPH,
+    )
+
+    assert decision.selected_mode == RetrievalMode.SIMPLE
+    assert decision.router_mode == RetrievalMode.SIMPLE
+    assert decision.effective_mode == RetrievalMode.GRAPH
+    assert decision.status == "blocked_by_flag"
+    assert decision.blocked_reason == "graph_rag_lite is disabled"
+
+
 def test_to_safe_dict_excludes_private_content_keys():
     service = RAGRoutePolicyService(
         RAGRoutePolicyConfig(
@@ -203,6 +295,7 @@ def test_to_safe_dict_excludes_private_content_keys():
     safe = decision.to_safe_dict()
 
     assert safe["selected_mode"] == "graph_rag_lite"
+    assert safe["effective_mode"] == "graph_rag_lite"
     assert safe["fallback_chain"] == ["simple_rag"]
     assert not {"query", "content", "snippet", "secret", "password", "token"} & set(safe)
 
