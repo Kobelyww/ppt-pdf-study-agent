@@ -7,7 +7,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from src.db.models import Base, Document, DocumentArtifactRecord
+from src.db.models import Base, Document, DocumentArtifactRecord, DocumentChunkRecord
+from src.services.study_agent_index import DocumentIndexStatus, StudyDocumentIndexService
 from src.services.study_agent_documents import (
     StudyAgentDocumentError,
     StudyDocumentChunker,
@@ -218,3 +219,279 @@ def test_chunker_skips_blank_artifact_content():
 def test_chunker_rejects_invalid_overlap_configuration():
     with pytest.raises(ValueError, match="overlap_chars must be smaller than max_chars"):
         StudyDocumentChunker(max_chars=10, overlap_chars=10)
+
+
+def test_index_service_persists_chunks_with_required_metadata():
+    Session = _session_factory()
+    _insert_document(Session, document_id="doc-1", owner_id="user-1")
+    _insert_artifact(
+        Session,
+        artifact_id="artifact-1",
+        document_id="doc-1",
+        content="Derivatives measure instantaneous rate of change. Gradients extend derivatives.",
+        created_at=datetime.now(timezone.utc),
+    )
+    service = StudyDocumentIndexService(
+        session_factory=Session,
+        chunker=StudyDocumentChunker(max_chars=48, overlap_chars=8),
+    )
+
+    status = service.index_document(owner_id="user-1", document_id="doc-1")
+
+    assert status.document_id == "doc-1"
+    assert status.status == "indexed"
+    assert status.artifact_id == "artifact-1"
+    assert status.chunk_count >= 2
+    assert status.indexed_at is not None
+    assert status.fallback_reason is None
+    with Session() as session:
+        chunks = (
+            session.query(DocumentChunkRecord)
+            .filter(DocumentChunkRecord.document_id == "doc-1")
+            .order_by(DocumentChunkRecord.chunk_index)
+            .all()
+        )
+    assert len(chunks) == status.chunk_count
+    assert chunks[0].owner_id == "user-1"
+    assert chunks[0].artifact_id == "artifact-1"
+    assert chunks[0].source == "document:doc-1:chunk:0"
+    assert len(chunks[0].id) <= 64
+    assert chunks[0].chunk_metadata["source_kind"] == "persisted_document_chunk"
+    assert chunks[0].chunk_metadata["document_title"] == "Calculus Notes"
+    assert chunks[0].content_hash != chunks[0].content
+
+
+def test_index_service_reindex_is_idempotent_for_same_artifact():
+    Session = _session_factory()
+    _insert_document(Session, document_id="doc-1", owner_id="user-1")
+    _insert_artifact(
+        Session,
+        artifact_id="artifact-1",
+        document_id="doc-1",
+        content="Derivatives measure instantaneous rate of change.",
+        created_at=datetime.now(timezone.utc),
+    )
+    service = StudyDocumentIndexService(session_factory=Session)
+
+    first = service.index_document(owner_id="user-1", document_id="doc-1")
+    second = service.index_document(owner_id="user-1", document_id="doc-1")
+
+    assert first.status == "indexed"
+    assert second.status == "indexed"
+    with Session() as session:
+        assert session.query(DocumentChunkRecord).count() == first.chunk_count
+
+
+def test_index_service_reindex_new_artifact_replaces_stale_chunks():
+    Session = _session_factory()
+    _insert_document(Session, document_id="doc-1", owner_id="user-1")
+    old_time = datetime.now(timezone.utc) - timedelta(days=1)
+    new_time = datetime.now(timezone.utc)
+    _insert_artifact(
+        Session,
+        artifact_id="artifact-old",
+        document_id="doc-1",
+        content="Old derivative notes split across several chunks for removal.",
+        created_at=old_time,
+    )
+    service = StudyDocumentIndexService(
+        session_factory=Session,
+        chunker=StudyDocumentChunker(max_chars=24, overlap_chars=4),
+    )
+    old_status = service.index_document(owner_id="user-1", document_id="doc-1")
+    _insert_artifact(
+        Session,
+        artifact_id="artifact-new",
+        document_id="doc-1",
+        content="New integral notes",
+        created_at=new_time,
+    )
+
+    new_status = service.index_document(owner_id="user-1", document_id="doc-1")
+
+    assert old_status.artifact_id == "artifact-old"
+    assert new_status.artifact_id == "artifact-new"
+    with Session() as session:
+        rows = session.query(DocumentChunkRecord).all()
+    assert {row.artifact_id for row in rows} == {"artifact-new"}
+    assert len(rows) == new_status.chunk_count
+
+
+def test_index_service_status_reports_missing_index_and_stale_index():
+    Session = _session_factory()
+    _insert_document(Session, document_id="doc-1", owner_id="user-1")
+    old_time = datetime.now(timezone.utc) - timedelta(days=1)
+    new_time = datetime.now(timezone.utc)
+    _insert_artifact(
+        Session,
+        artifact_id="artifact-old",
+        document_id="doc-1",
+        content="Old derivative notes",
+        created_at=old_time,
+    )
+    service = StudyDocumentIndexService(session_factory=Session)
+
+    missing = service.status(owner_id="user-1", document_id="doc-1")
+    assert missing.status == "fallback_available"
+    assert missing.chunk_count == 0
+    assert missing.fallback_reason == "persisted_chunks_missing"
+
+    service.index_document(owner_id="user-1", document_id="doc-1")
+    _insert_artifact(
+        Session,
+        artifact_id="artifact-new",
+        document_id="doc-1",
+        content="New derivative notes",
+        created_at=new_time,
+    )
+
+    stale = service.status(owner_id="user-1", document_id="doc-1")
+    assert stale.status == "stale"
+    assert stale.artifact_id == "artifact-old"
+    assert stale.fallback_reason == "latest_artifact_not_indexed"
+
+
+def test_index_service_load_chunks_filters_owner_and_requested_documents():
+    Session = _session_factory()
+    _insert_document(Session, document_id="doc-1", owner_id="user-1")
+    _insert_document(Session, document_id="doc-2", owner_id="user-2")
+    now = datetime.now(timezone.utc)
+    _insert_artifact(
+        Session,
+        artifact_id="artifact-1",
+        document_id="doc-1",
+        content="Owned notes",
+        created_at=now,
+    )
+    _insert_artifact(
+        Session,
+        artifact_id="artifact-2",
+        document_id="doc-2",
+        content="Private notes",
+        created_at=now,
+    )
+    service = StudyDocumentIndexService(session_factory=Session)
+    service.index_document(owner_id="user-1", document_id="doc-1")
+    service.index_document(owner_id="user-2", document_id="doc-2")
+
+    chunks = service.load_chunks(owner_id="user-1", document_ids=("doc-1", "doc-2"))
+
+    assert {chunk["metadata"]["document_id"] for chunk in chunks} == {"doc-1"}
+    assert all(chunk["metadata"]["owner_id"] == "user-1" for chunk in chunks)
+
+
+def test_document_index_status_to_dict_serializes_datetime_without_content():
+    indexed_at = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    status = DocumentIndexStatus(
+        document_id="doc-1",
+        status="indexed",
+        artifact_id="artifact-1",
+        chunk_count=3,
+        indexed_at=indexed_at,
+        fallback_reason=None,
+    )
+
+    serialized = status.to_dict()
+
+    assert serialized == {
+        "document_id": "doc-1",
+        "status": "indexed",
+        "artifact_id": "artifact-1",
+        "chunk_count": 3,
+        "indexed_at": "2026-01-02T03:04:05+00:00",
+        "fallback_reason": None,
+    }
+    assert "content" not in serialized
+
+
+def test_index_artifact_can_bypass_ready_check_but_index_document_rejects_processing():
+    Session = _session_factory()
+    _insert_document(
+        Session,
+        document_id="doc-processing",
+        owner_id="user-1",
+        status="processing",
+    )
+    _insert_artifact(
+        Session,
+        artifact_id="artifact-1",
+        document_id="doc-processing",
+        content="Worker normalized text",
+        created_at=datetime.now(timezone.utc),
+    )
+    service = StudyDocumentIndexService(session_factory=Session)
+
+    with pytest.raises(StudyAgentDocumentError) as exc_info:
+        service.index_document(owner_id="user-1", document_id="doc-processing")
+
+    assert exc_info.value.code == "document_not_ready"
+    status = service.index_artifact(
+        owner_id="user-1",
+        document_id="doc-processing",
+        artifact_id="artifact-1",
+        require_ready=False,
+    )
+    assert status.status == "indexed"
+
+
+def test_index_service_rejects_empty_chunk_output_as_missing_evidence():
+    class EmptyChunker:
+        def chunk(self, evidence):
+            return []
+
+    Session = _session_factory()
+    _insert_document(Session, document_id="doc-1", owner_id="user-1")
+    _insert_artifact(
+        Session,
+        artifact_id="artifact-1",
+        document_id="doc-1",
+        content="Visible artifact content",
+        created_at=datetime.now(timezone.utc),
+    )
+    service = StudyDocumentIndexService(session_factory=Session, chunker=EmptyChunker())
+
+    with pytest.raises(StudyAgentDocumentError) as exc_info:
+        service.index_document(owner_id="user-1", document_id="doc-1")
+
+    assert exc_info.value.code == "document_evidence_missing"
+    with Session() as session:
+        assert session.query(DocumentChunkRecord).count() == 0
+
+
+def test_index_service_content_hash_includes_source_defining_metadata():
+    Session = _session_factory()
+    _insert_document(Session, document_id="doc-1", owner_id="user-1")
+    now = datetime.now(timezone.utc)
+    _insert_artifact(
+        Session,
+        artifact_id="artifact-1",
+        document_id="doc-1",
+        content="Same normalized text",
+        created_at=now - timedelta(days=1),
+    )
+    _insert_artifact(
+        Session,
+        artifact_id="artifact-2",
+        document_id="doc-1",
+        content="Same normalized text",
+        created_at=now,
+    )
+    service = StudyDocumentIndexService(session_factory=Session)
+
+    first = service.index_artifact(
+        owner_id="user-1",
+        document_id="doc-1",
+        artifact_id="artifact-1",
+    )
+    with Session() as session:
+        first_hash = session.query(DocumentChunkRecord.content_hash).one()[0]
+    second = service.index_artifact(
+        owner_id="user-1",
+        document_id="doc-1",
+        artifact_id="artifact-2",
+    )
+    with Session() as session:
+        second_hash = session.query(DocumentChunkRecord.content_hash).one()[0]
+
+    assert first.chunk_count == second.chunk_count == 1
+    assert first_hash != second_hash
