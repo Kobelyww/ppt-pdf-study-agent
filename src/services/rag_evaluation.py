@@ -79,6 +79,8 @@ class RAGEvaluationRun:
     readiness: dict
     report_json_path: Path
     report_markdown_path: Path
+    report_json_uri: str | None = None
+    report_markdown_uri: str | None = None
 
 
 class RAGEvaluationReport:
@@ -178,9 +180,11 @@ class RAGQualityEvaluationService:
         self,
         report_dir: str | Path = "docs/evaluation",
         session_factory=None,
+        storage=None,
     ) -> None:
         self.report_dir = Path(report_dir)
         self.session_factory = session_factory
+        self.storage = storage
         self.evaluator = RAGEvaluator()
 
     def run_fixture_file(
@@ -226,11 +230,28 @@ class RAGQualityEvaluationService:
             "readiness": readiness,
         }
 
-        report_json_path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
-        report_markdown_path.write_text(_markdown_report(payload), encoding="utf-8")
+        json_content = json.dumps(
+            payload, ensure_ascii=False, indent=2, sort_keys=True
+        ).encode("utf-8")
+        markdown_content = _markdown_report(payload).encode("utf-8")
+        report_json_path.write_bytes(json_content)
+        report_markdown_path.write_bytes(markdown_content)
+        report_json_uri = None
+        report_markdown_uri = None
+        if self.storage is not None:
+            report_json_uri = self.storage.put_bytes(
+                namespace="rag-evaluations",
+                original_filename=f"{run_id}.json",
+                content=json_content,
+                content_type="application/json",
+            ).storage_uri
+            report_markdown_uri = self.storage.put_bytes(
+                namespace="rag-evaluations",
+                original_filename=f"{run_id}.md",
+                content=markdown_content,
+                content_type="text/markdown",
+            ).storage_uri
+        report_uri = report_markdown_uri or str(report_markdown_path)
 
         if self.session_factory is not None:
             self._persist_run(
@@ -240,7 +261,7 @@ class RAGQualityEvaluationService:
                 modes=modes,
                 case_count=len(cases),
                 summary=summary,
-                report_uri=str(report_markdown_path),
+                report_uri=report_uri,
                 score_rows=score_rows,
             )
 
@@ -255,6 +276,8 @@ class RAGQualityEvaluationService:
             readiness=readiness,
             report_json_path=report_json_path,
             report_markdown_path=report_markdown_path,
+            report_json_uri=report_json_uri,
+            report_markdown_uri=report_markdown_uri,
         )
 
     def _persist_run(

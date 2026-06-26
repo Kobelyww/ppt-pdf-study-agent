@@ -11,6 +11,7 @@ from src.services.rag_evaluation import (
     RAGQualityEvaluationService,
     load_rag_eval_cases,
 )
+from src.storage.backend import LocalStorageBackend
 
 
 def test_rag_evaluator_scores_terms_and_sources():
@@ -246,6 +247,29 @@ def test_rag_quality_evaluation_service_runs_modes_and_writes_reports(tmp_path):
     assert all(expected_score_keys.issubset(score) for score in payload["scores"])
     assert run.report_markdown_path.exists()
     assert "Mode Comparison" in run.report_markdown_path.read_text(encoding="utf-8")
+
+
+def test_rag_quality_evaluation_service_stores_reports_in_storage_backend(tmp_path):
+    fixture_path = Path(__file__).parent / "fixtures" / "rag_eval_set.json"
+    backend = LocalStorageBackend(tmp_path / "objects")
+    service = RAGQualityEvaluationService(
+        report_dir=tmp_path / "reports",
+        storage=backend,
+    )
+
+    run = service.run_fixture_file(
+        fixture_path,
+        modes=["simple_rag", "graph_rag_lite"],
+        created_by="admin-1",
+    )
+
+    assert run.report_markdown_uri.startswith("local://")
+    markdown = backend.read_bytes(run.report_markdown_uri).decode("utf-8")
+    assert "Mode Comparison" in markdown
+    assert run.report_json_uri.startswith("local://")
+    payload = json.loads(backend.read_bytes(run.report_json_uri).decode("utf-8"))
+    assert payload["id"] == run.id
+    assert run.report_markdown_path.exists()
 
 
 def test_rag_quality_evaluation_service_persists_runs_and_case_scores(tmp_path):

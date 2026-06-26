@@ -122,7 +122,7 @@ def _client(tmp_path: Path):
         allow_dev_user_header=False,
         study_agent_orchestrator=orchestrator,
     )
-    return TestClient(app), orchestrator, Session
+    return TestClient(app), orchestrator, Session, document_service
 
 
 def _login(client: TestClient) -> dict[str, str]:
@@ -187,7 +187,7 @@ def _insert_ready_document_for_api(
 
 
 def test_document_payload_includes_compact_study_index_status(tmp_path: Path):
-    client, _orchestrator, Session = _client(tmp_path)
+    client, _orchestrator, Session, _document_service = _client(tmp_path)
     headers = _login(client)
     _insert_ready_document_for_api(Session)
 
@@ -206,7 +206,7 @@ def test_document_payload_includes_compact_study_index_status(tmp_path: Path):
 
 
 def test_reindex_endpoint_indexes_owned_ready_document(tmp_path: Path):
-    client, _orchestrator, Session = _client(tmp_path)
+    client, _orchestrator, Session, _document_service = _client(tmp_path)
     headers = _login(client)
     _insert_ready_document_for_api(Session)
 
@@ -226,7 +226,7 @@ def test_reindex_endpoint_indexes_owned_ready_document(tmp_path: Path):
 
 
 def test_reindex_endpoint_returns_404_for_cross_owner_document(tmp_path: Path):
-    client, _orchestrator, Session = _client(tmp_path)
+    client, _orchestrator, Session, _document_service = _client(tmp_path)
     headers = _login(client)
     _insert_ready_document_for_api(Session, document_id="doc-private", owner_id="user-2")
 
@@ -236,7 +236,7 @@ def test_reindex_endpoint_returns_404_for_cross_owner_document(tmp_path: Path):
 
 
 def test_reindex_endpoint_rejects_processing_document(tmp_path: Path):
-    client, _orchestrator, Session = _client(tmp_path)
+    client, _orchestrator, Session, _document_service = _client(tmp_path)
     headers = _login(client)
     _insert_ready_document_for_api(
         Session, document_id="doc-processing", owner_id="user-1"
@@ -252,7 +252,7 @@ def test_reindex_endpoint_rejects_processing_document(tmp_path: Path):
 
 
 def test_reindex_endpoint_returns_422_when_normalized_artifact_missing(tmp_path: Path):
-    client, _orchestrator, Session = _client(tmp_path)
+    client, _orchestrator, Session, _document_service = _client(tmp_path)
     headers = _login(client)
     _insert_study_document(
         Session, document_id="doc-missing-artifact", owner_id="user-1", content=None
@@ -284,7 +284,7 @@ def test_reindex_endpoint_returns_503_without_index_service(tmp_path: Path):
 
 
 def test_reindex_endpoint_persists_sanitized_audit_metadata(tmp_path: Path):
-    client, _orchestrator, Session = _client(tmp_path)
+    client, _orchestrator, Session, _document_service = _client(tmp_path)
     headers = _login(client)
     _insert_ready_document_for_api(Session)
 
@@ -324,7 +324,7 @@ def test_reindex_endpoint_persists_sanitized_audit_metadata(tmp_path: Path):
 
 
 def test_study_agent_query_requires_authentication(tmp_path: Path):
-    client, _orchestrator, _Session = _client(tmp_path)
+    client, _orchestrator, _Session, _document_service = _client(tmp_path)
 
     response = client.post("/api/study-agent/query", json={"query": "什么是导数？"})
 
@@ -332,7 +332,7 @@ def test_study_agent_query_requires_authentication(tmp_path: Path):
 
 
 def test_study_agent_query_returns_trace_payload(tmp_path: Path):
-    client, orchestrator, _Session = _client(tmp_path)
+    client, orchestrator, _Session, _document_service = _client(tmp_path)
     headers = _login(client)
 
     response = client.post(
@@ -366,7 +366,7 @@ def test_study_agent_query_returns_trace_payload(tmp_path: Path):
 
 
 def test_trace_detail_api_returns_owner_scoped_safe_trace(tmp_path: Path):
-    client, _orchestrator, _Session = _client(tmp_path)
+    client, _orchestrator, _Session, _document_service = _client(tmp_path)
     headers = _login(client)
     response = client.post(
         "/api/study-agent/query",
@@ -387,7 +387,7 @@ def test_trace_detail_api_returns_owner_scoped_safe_trace(tmp_path: Path):
 
 
 def test_index_summary_api_returns_owner_scoped_counts(tmp_path: Path):
-    client, _orchestrator, _Session = _client(tmp_path)
+    client, _orchestrator, _Session, _document_service = _client(tmp_path)
     headers = _login(client)
 
     response = client.get("/api/study-agent/index-summary", headers=headers)
@@ -400,7 +400,7 @@ def test_index_summary_api_returns_owner_scoped_counts(tmp_path: Path):
 
 
 def test_admin_rag_evaluation_api_requires_admin_role(tmp_path: Path):
-    client, _orchestrator, _Session = _client(tmp_path)
+    client, _orchestrator, _Session, _document_service = _client(tmp_path)
     headers = _login(client)
 
     response = client.post(
@@ -413,7 +413,7 @@ def test_admin_rag_evaluation_api_requires_admin_role(tmp_path: Path):
 
 
 def test_admin_rag_evaluation_api_creates_run(tmp_path: Path):
-    client, _orchestrator, Session = _client(tmp_path)
+    client, _orchestrator, Session, _document_service = _client(tmp_path)
     headers = _login_admin(client, Session)
 
     response = client.post(
@@ -429,6 +429,60 @@ def test_admin_rag_evaluation_api_creates_run(tmp_path: Path):
     assert payload["case_count"] == 4
     assert "summary" in payload
     assert "readiness" in payload
+
+
+def test_admin_rag_evaluation_api_gets_run_metadata_and_requires_admin(tmp_path: Path):
+    client, _orchestrator, Session, _document_service = _client(tmp_path)
+    admin_headers = _login_admin(client, Session)
+    user_headers = _login(client)
+
+    created = client.post(
+        "/api/admin/rag-evaluations",
+        json={"report_dir": str(tmp_path / "reports")},
+        headers=admin_headers,
+    )
+    assert created.status_code == 200
+    run_id = created.json()["id"]
+
+    response = client.get(
+        f"/api/admin/rag-evaluations/{run_id}",
+        headers=admin_headers,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["id"] == run_id
+    assert payload["status"] == "completed"
+    assert payload["created_by"] == "admin-1"
+    assert payload["case_count"] == 4
+    assert payload["summary"]
+    assert "readiness" in payload
+    assert payload["report_uri"]
+
+    forbidden = client.get(
+        f"/api/admin/rag-evaluations/{run_id}",
+        headers=user_headers,
+    )
+    assert forbidden.status_code == 403
+
+
+def test_admin_rag_evaluation_api_stores_report_in_configured_storage(
+    tmp_path: Path,
+):
+    client, _orchestrator, Session, document_service = _client(tmp_path)
+    headers = _login_admin(client, Session)
+
+    response = client.post(
+        "/api/admin/rag-evaluations",
+        json={"report_dir": str(tmp_path / "reports")},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["report_uri"].startswith("local://")
+    report = document_service.storage.read_bytes(payload["report_uri"]).decode("utf-8")
+    assert "Mode Comparison" in report
 
 
 def test_study_agent_query_returns_compact_unpersisted_trace_without_session_factory():
@@ -498,7 +552,7 @@ def test_study_agent_query_returns_compact_unpersisted_trace_without_session_fac
 
 
 def test_study_agent_query_uses_authenticated_user_context(tmp_path: Path):
-    client, orchestrator, _Session = _client(tmp_path)
+    client, orchestrator, _Session, _document_service = _client(tmp_path)
     headers = _login(client)
 
     response = client.post(
@@ -523,7 +577,7 @@ def test_study_agent_query_uses_authenticated_user_context(tmp_path: Path):
 
 
 def test_study_agent_query_validates_payload(tmp_path: Path):
-    client, _orchestrator, _Session = _client(tmp_path)
+    client, _orchestrator, _Session, _document_service = _client(tmp_path)
     headers = _login(client)
 
     response = client.post(
@@ -536,7 +590,7 @@ def test_study_agent_query_validates_payload(tmp_path: Path):
 
 
 def test_study_agent_query_persists_sanitized_audit_event(tmp_path: Path):
-    client, _orchestrator, Session = _client(tmp_path)
+    client, _orchestrator, Session, _document_service = _client(tmp_path)
     headers = _login(client)
 
     response = client.post(
