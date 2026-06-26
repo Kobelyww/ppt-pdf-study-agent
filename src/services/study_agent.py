@@ -55,6 +55,7 @@ class EvidenceBundle:
     confidence: float
     reason: str
     fallback_reason: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -307,6 +308,8 @@ class EvidenceCollector:
         if not chunks:
             return self._simple_bundle(request, fallback_reason=result.reason)
 
+        metadata = result.metadata.copy()
+        metadata["fallback_reason"] = None
         return EvidenceBundle(
             mode=RetrievalMode.GRAPH,
             chunks=tuple(chunks),
@@ -318,6 +321,7 @@ class EvidenceCollector:
                 if chunks
                 else result.reason
             ),
+            metadata=metadata,
         )
 
     async def _agentic_bundle(self, request: StudyRequest) -> EvidenceBundle:
@@ -339,6 +343,7 @@ class EvidenceCollector:
                     confidence=graph_bundle.confidence,
                     reason="agentic plan with graph-expanded evidence",
                     fallback_reason=graph_bundle.fallback_reason,
+                    metadata=graph_bundle.metadata,
                 )
         return self._simple_bundle(request, fallback_reason="agentic evidence unavailable")
 
