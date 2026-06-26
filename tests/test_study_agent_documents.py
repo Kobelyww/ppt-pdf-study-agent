@@ -77,6 +77,24 @@ def _insert_artifact(
         session.commit()
 
 
+def _add_ready_document_with_artifact(
+    Session,
+    *,
+    document_id: str,
+    owner_id: str,
+    artifact_id: str,
+    content: str,
+) -> None:
+    _insert_document(Session, document_id=document_id, owner_id=owner_id)
+    _insert_artifact(
+        Session,
+        artifact_id=artifact_id,
+        document_id=document_id,
+        content=content,
+        created_at=datetime.now(timezone.utc),
+    )
+
+
 def test_evidence_source_loads_latest_ready_owner_artifact():
     Session = _session_factory()
     _insert_document(Session, document_id="doc-1", owner_id="user-1")
@@ -244,6 +262,10 @@ def test_index_service_persists_chunks_with_required_metadata():
     assert status.chunk_count >= 2
     assert status.indexed_at is not None
     assert status.fallback_reason is None
+    payload = status.to_dict()
+    assert payload["expected_chunk_count"] == status.chunk_count
+    assert payload["latest_artifact_id"] == status.artifact_id
+    assert payload["indexed_artifact_id"] == status.artifact_id
     with Session() as session:
         chunks = (
             session.query(DocumentChunkRecord)
@@ -388,6 +410,45 @@ def test_index_service_status_reports_incomplete_persisted_chunk_set_as_fallback
     assert status.fallback_reason == "persisted_chunks_incomplete"
 
 
+def test_index_service_summary_counts_statuses_and_fallback_reasons():
+    Session = _session_factory()
+    _add_ready_document_with_artifact(
+        Session,
+        document_id="doc-indexed",
+        owner_id="user-1",
+        artifact_id="artifact-indexed",
+        content="Derivative content",
+    )
+    _add_ready_document_with_artifact(
+        Session,
+        document_id="doc-missing",
+        owner_id="user-1",
+        artifact_id="artifact-missing",
+        content="Gradient content",
+    )
+    _add_ready_document_with_artifact(
+        Session,
+        document_id="doc-other",
+        owner_id="user-2",
+        artifact_id="artifact-other",
+        content="Other content",
+    )
+    service = StudyDocumentIndexService(Session)
+    service.index_document(owner_id="user-1", document_id="doc-indexed")
+
+    summary = service.summary(owner_id="user-1")
+
+    assert summary["owner_id"] == "user-1"
+    assert summary["total_documents"] == 2
+    assert summary["status_counts"]["indexed"] == 1
+    assert summary["status_counts"]["fallback_available"] == 1
+    assert summary["fallback_reason_counts"]["persisted_chunks_missing"] == 1
+    assert {item["document_id"] for item in summary["documents"]} == {
+        "doc-indexed",
+        "doc-missing",
+    }
+
+
 def test_index_service_load_chunks_filters_owner_and_requested_documents():
     Session = _session_factory()
     _insert_document(Session, document_id="doc-1", owner_id="user-1")
@@ -437,6 +498,9 @@ def test_document_index_status_to_dict_serializes_datetime_without_content():
         "chunk_count": 3,
         "indexed_at": "2026-01-02T03:04:05+00:00",
         "fallback_reason": None,
+        "expected_chunk_count": None,
+        "indexed_artifact_id": None,
+        "latest_artifact_id": None,
     }
     assert "content" not in serialized
 

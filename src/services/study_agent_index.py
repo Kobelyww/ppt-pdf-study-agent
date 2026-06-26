@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
@@ -21,6 +22,9 @@ class DocumentIndexStatus:
     chunk_count: int
     indexed_at: datetime | None
     fallback_reason: str | None
+    expected_chunk_count: int | None = None
+    indexed_artifact_id: str | None = None
+    latest_artifact_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -30,6 +34,9 @@ class DocumentIndexStatus:
             "chunk_count": self.chunk_count,
             "indexed_at": self.indexed_at.isoformat() if self.indexed_at else None,
             "fallback_reason": self.fallback_reason,
+            "expected_chunk_count": self.expected_chunk_count,
+            "indexed_artifact_id": self.indexed_artifact_id,
+            "latest_artifact_id": self.latest_artifact_id,
         }
 
 
@@ -164,6 +171,9 @@ class StudyDocumentIndexService:
                     chunk_count=len(chunks),
                     indexed_at=indexed_at if chunks else None,
                     fallback_reason=None,
+                    expected_chunk_count=len(chunks),
+                    indexed_artifact_id=artifact.id,
+                    latest_artifact_id=artifact.id,
                 )
 
         return status
@@ -197,6 +207,9 @@ class StudyDocumentIndexService:
                     chunk_count=0,
                     indexed_at=None,
                     fallback_reason="normalized_artifact_missing",
+                    expected_chunk_count=None,
+                    indexed_artifact_id=None,
+                    latest_artifact_id=None,
                 )
 
             if not chunks:
@@ -207,6 +220,9 @@ class StudyDocumentIndexService:
                     chunk_count=0,
                     indexed_at=None,
                     fallback_reason="persisted_chunks_missing",
+                    expected_chunk_count=None,
+                    indexed_artifact_id=None,
+                    latest_artifact_id=latest_artifact.id,
                 )
 
             indexed_artifact_id = str(chunks[0].artifact_id)
@@ -225,6 +241,9 @@ class StudyDocumentIndexService:
                     chunk_count=len(chunks),
                     indexed_at=indexed_at,
                     fallback_reason="latest_artifact_not_indexed",
+                    expected_chunk_count=None,
+                    indexed_artifact_id=stale_artifact_id,
+                    latest_artifact_id=latest_artifact.id,
                 )
 
             if not persisted_chunk_set_is_complete(
@@ -232,6 +251,7 @@ class StudyDocumentIndexService:
                 document_id=document.id,
                 artifact_id=latest_artifact.id,
             ):
+                expected_chunk_count = _chunk_metadata(chunks[0]).get("chunk_count")
                 return DocumentIndexStatus(
                     document_id=document.id,
                     status="fallback_available",
@@ -239,6 +259,9 @@ class StudyDocumentIndexService:
                     chunk_count=len(chunks),
                     indexed_at=indexed_at,
                     fallback_reason="persisted_chunks_incomplete",
+                    expected_chunk_count=expected_chunk_count,
+                    indexed_artifact_id=latest_artifact.id,
+                    latest_artifact_id=latest_artifact.id,
                 )
 
             return DocumentIndexStatus(
@@ -248,7 +271,40 @@ class StudyDocumentIndexService:
                 chunk_count=len(chunks),
                 indexed_at=indexed_at,
                 fallback_reason=None,
+                expected_chunk_count=len(chunks),
+                indexed_artifact_id=indexed_artifact_id,
+                latest_artifact_id=latest_artifact.id,
             )
+
+    def summary(self, owner_id: str) -> dict[str, Any]:
+        normalized_owner_id = _require_owner_id(owner_id)
+        with self.session_factory() as session:
+            documents = (
+                session.query(Document)
+                .filter(
+                    Document.owner_id == normalized_owner_id,
+                    Document.status == "ready",
+                )
+                .order_by(Document.created_at.desc(), Document.id)
+                .all()
+            )
+        statuses = [
+            self.status(owner_id=normalized_owner_id, document_id=document.id).to_dict()
+            for document in documents
+        ]
+        status_counts = Counter(status["status"] for status in statuses)
+        fallback_reason_counts = Counter(
+            status["fallback_reason"]
+            for status in statuses
+            if status.get("fallback_reason")
+        )
+        return {
+            "owner_id": normalized_owner_id,
+            "total_documents": len(statuses),
+            "status_counts": dict(status_counts),
+            "fallback_reason_counts": dict(fallback_reason_counts),
+            "documents": statuses,
+        }
 
     def load_chunks(
         self,
