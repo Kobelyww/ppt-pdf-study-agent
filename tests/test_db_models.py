@@ -285,7 +285,7 @@ def test_rag_quality_observability_records_create_and_preserve_safe_metadata(tmp
             document_ids=["doc-1", "doc-2"],
             selected_mode="hybrid",
             route_reason="semantic_and_keyword_match",
-            estimated_cost=0.0125,
+            estimated_cost="low",
             fallback_chain=["hybrid", "keyword"],
             chunk_source="document_chunks",
             fallback_reason="semantic_low_confidence",
@@ -335,7 +335,7 @@ def test_rag_quality_observability_records_create_and_preserve_safe_metadata(tmp
         assert trace.target == "exam_prep"
         assert trace.document_ids == ["doc-1", "doc-2"]
         assert trace.route_reason == "semantic_and_keyword_match"
-        assert trace.estimated_cost == 0.0125
+        assert trace.estimated_cost == "low"
         assert trace.fallback_chain == ["hybrid", "keyword"]
         assert trace.chunk_source == "document_chunks"
         assert trace.fallback_reason == "semantic_low_confidence"

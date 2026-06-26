@@ -28,7 +28,7 @@ def upgrade() -> None:
         sa.Column("document_ids", sa.JSON(), nullable=False),
         sa.Column("selected_mode", sa.String(length=64), nullable=False),
         sa.Column("route_reason", sa.String(length=255), nullable=True),
-        sa.Column("estimated_cost", sa.Float(), nullable=True),
+        sa.Column("estimated_cost", sa.String(length=32), nullable=False),
         sa.Column("fallback_chain", sa.JSON(), nullable=False),
         sa.Column("chunk_source", sa.String(length=128), nullable=True),
         sa.Column("fallback_reason", sa.String(length=255), nullable=True),

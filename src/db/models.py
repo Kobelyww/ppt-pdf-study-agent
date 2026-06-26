@@ -366,7 +366,7 @@ class StudyAgentTraceRecord(Base):
     document_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     selected_mode: Mapped[str] = mapped_column(String(64), nullable=False)
     route_reason: Mapped[Optional[str]] = mapped_column(String(255))
-    estimated_cost: Mapped[Optional[float]] = mapped_column(Float)
+    estimated_cost: Mapped[str] = mapped_column(String(32), nullable=False)
     fallback_chain: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     chunk_source: Mapped[Optional[str]] = mapped_column(String(128))
     fallback_reason: Mapped[Optional[str]] = mapped_column(String(255))
