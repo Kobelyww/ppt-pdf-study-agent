@@ -269,7 +269,7 @@ def test_rag_quality_evaluation_service_stores_reports_in_storage_backend(tmp_pa
     assert run.report_json_uri.startswith("local://")
     payload = json.loads(backend.read_bytes(run.report_json_uri).decode("utf-8"))
     assert payload["id"] == run.id
-    assert run.report_markdown_path.exists()
+    assert not (tmp_path / "reports").exists()
 
 
 def test_rag_quality_evaluation_service_persists_runs_and_case_scores(tmp_path):

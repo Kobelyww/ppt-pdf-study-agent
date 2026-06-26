@@ -216,7 +216,6 @@ class RAGQualityEvaluationService:
         summary = report.summary()
         readiness = evaluate_route_readiness(summary)
         run_id = f"eval-run-{uuid4().hex}"
-        self.report_dir.mkdir(parents=True, exist_ok=True)
         report_json_path = self.report_dir / f"{run_id}.json"
         report_markdown_path = self.report_dir / f"{run_id}.md"
         payload = {
@@ -234,8 +233,6 @@ class RAGQualityEvaluationService:
             payload, ensure_ascii=False, indent=2, sort_keys=True
         ).encode("utf-8")
         markdown_content = _markdown_report(payload).encode("utf-8")
-        report_json_path.write_bytes(json_content)
-        report_markdown_path.write_bytes(markdown_content)
         report_json_uri = None
         report_markdown_uri = None
         if self.storage is not None:
@@ -251,6 +248,10 @@ class RAGQualityEvaluationService:
                 content=markdown_content,
                 content_type="text/markdown",
             ).storage_uri
+        else:
+            self.report_dir.mkdir(parents=True, exist_ok=True)
+            report_json_path.write_bytes(json_content)
+            report_markdown_path.write_bytes(markdown_content)
         report_uri = report_markdown_uri or str(report_markdown_path)
 
         if self.session_factory is not None:
