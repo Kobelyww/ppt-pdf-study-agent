@@ -81,7 +81,15 @@ def test_classifies_question_generation_query():
 def test_classifies_outline_fragment_from_target():
     decision = RAGStrategyRouter().route("整理这一章的重点", target="outline_fragment")
 
+    assert decision.mode == RetrievalMode.SIMPLE
     assert decision.category == QueryCategory.OUTLINE_FRAGMENT
+
+
+def test_classifies_blank_query_as_unknown_simple_rag():
+    decision = RAGStrategyRouter().route("   ")
+
+    assert decision.mode == RetrievalMode.SIMPLE
+    assert decision.category == QueryCategory.UNKNOWN
 
 
 def test_classifies_direct_lookup_default():
