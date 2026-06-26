@@ -331,10 +331,29 @@ class EvidenceCollector:
                 fallback_reason="low budget prevents agentic retrieval",
             )
 
-        self.agentic_planner.plan(request.query)
+        plan = self.agentic_planner.plan(request.query, budget=request.budget.value)
+        plan_metadata = plan.metadata.copy()
+        if plan_metadata.get("step_budget_exhausted") is True:
+            fallback_bundle = self._simple_bundle(
+                request,
+                fallback_reason="agentic step budget exhausted",
+            )
+            return EvidenceBundle(
+                mode=fallback_bundle.mode,
+                chunks=fallback_bundle.chunks,
+                sources=fallback_bundle.sources,
+                concept_ids=fallback_bundle.concept_ids,
+                confidence=fallback_bundle.confidence,
+                reason=fallback_bundle.reason,
+                fallback_reason=fallback_bundle.fallback_reason,
+                metadata=plan_metadata,
+            )
+
         if self.graph is not None:
             graph_bundle = await self._graph_bundle(request)
             if graph_bundle.mode == RetrievalMode.GRAPH and graph_bundle.chunks:
+                metadata = graph_bundle.metadata.copy()
+                metadata.update(plan_metadata)
                 return EvidenceBundle(
                     mode=RetrievalMode.AGENTIC,
                     chunks=graph_bundle.chunks,
@@ -342,10 +361,23 @@ class EvidenceCollector:
                     concept_ids=graph_bundle.concept_ids,
                     confidence=graph_bundle.confidence,
                     reason="agentic plan with graph-expanded evidence",
-                    fallback_reason=graph_bundle.fallback_reason,
-                    metadata=graph_bundle.metadata,
+                    fallback_reason=None,
+                    metadata=metadata,
                 )
-        return self._simple_bundle(request, fallback_reason="agentic evidence unavailable")
+        fallback_bundle = self._simple_bundle(
+            request,
+            fallback_reason="agentic evidence unavailable",
+        )
+        return EvidenceBundle(
+            mode=fallback_bundle.mode,
+            chunks=fallback_bundle.chunks,
+            sources=fallback_bundle.sources,
+            concept_ids=fallback_bundle.concept_ids,
+            confidence=fallback_bundle.confidence,
+            reason=fallback_bundle.reason,
+            fallback_reason=fallback_bundle.fallback_reason,
+            metadata=plan_metadata,
+        )
 
     def _recover_chunks_by_concept_id(
         self,

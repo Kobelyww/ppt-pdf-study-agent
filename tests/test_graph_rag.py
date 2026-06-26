@@ -354,4 +354,7 @@ async def test_agentic_bundle_preserves_graph_metadata_when_graph_evidence_succe
         "expanded_count": 1,
         "hop_count": 2,
         "fallback_reason": None,
+        "planned_step_count": 4,
+        "executed_step_count": 4,
+        "step_budget_exhausted": False,
     }
