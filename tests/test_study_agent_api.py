@@ -328,6 +328,13 @@ def test_study_agent_query_returns_trace_payload(tmp_path: Path):
     assert payload["evidence"]["sources"] == ["calculus:derivative"]
     assert payload["draft"]["citations"] == ["calculus:derivative"]
     assert payload["verification"]["passed"] is True
+    assert payload["trace"]["trace_id"].startswith("trace-")
+    assert payload["trace"]["request_id"] == "req-study-1"
+    assert payload["trace"]["selected_mode"] == "simple_rag"
+    assert payload["trace"]["chunk_source"] in {"persisted", None}
+    assert payload["trace"]["source_count"] == 1
+    assert payload["trace"]["used_chunk_count"] == 1
+    assert payload["trace"]["latency_ms"] >= 0
     assert orchestrator.payloads == [
         {
             "query": "什么是导数？",
@@ -407,6 +414,10 @@ def test_study_agent_query_persists_sanitized_audit_event(tmp_path: Path):
     assert event.event_metadata["source_count"] == 1
     assert event.event_metadata["chunk_count"] == 1
     assert event.event_metadata["document_count"] == 1
+    assert event.event_metadata["trace_id"].startswith("trace-")
+    assert "chunk_source" in event.event_metadata
+    assert "fallback_reason" in event.event_metadata
+    assert "latency_ms" in event.event_metadata
     assert "query" not in event.event_metadata
     assert "content" not in event.event_metadata
     assert "sources" not in event.event_metadata

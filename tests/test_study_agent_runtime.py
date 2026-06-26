@@ -152,6 +152,8 @@ async def test_runtime_prefers_persisted_chunks_over_query_time_chunking():
     assert result.evidence.chunks[0].metadata["source_kind"] == "persisted_document_chunk"
     assert result.audit_metadata["chunk_source"] == "persisted"
     assert result.audit_metadata["fallback_reason"] is None
+    assert result.audit_metadata["index_statuses"]["doc-study"]["status"] == "indexed"
+    assert result.audit_metadata["latency_ms"] >= 0
 
 
 @pytest.mark.asyncio
@@ -176,6 +178,10 @@ async def test_runtime_fallback_to_artifact_chunking_is_observable():
     assert result.evidence.chunks[0].metadata["source_kind"] == "normalized_document"
     assert result.audit_metadata["chunk_source"] == "fallback"
     assert result.audit_metadata["fallback_reason"] == "persisted_chunks_missing"
+    assert (
+        result.audit_metadata["index_statuses"]["doc-study"]["status"]
+        == "fallback_available"
+    )
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from time import perf_counter
 from typing import Any
 
 from src.knowledge.knowledge_graph import KnowledgeGraph
@@ -60,6 +61,7 @@ class StudyAgentRuntimeService:
 
     async def run(self, payload: dict[str, Any]):
         request = normalize_study_request(payload)
+        started_at = perf_counter()
         if not request.authenticated_user_id:
             raise StudyAgentDocumentError(
                 status_code=422,
@@ -77,6 +79,13 @@ class StudyAgentRuntimeService:
         )
         requested_artifact_by_document_id = {
             item.document_id: item.artifact_id for item in evidence
+        }
+        index_statuses = {
+            document_id: self.index_service.status(
+                owner_id=request.authenticated_user_id,
+                document_id=document_id,
+            ).to_dict()
+            for document_id in requested_artifact_by_document_id
         }
         requested_document_ids = set(requested_artifact_by_document_id)
         persisted_chunks_by_document_id: dict[str, list[dict[str, Any]]] = {}
@@ -147,6 +156,8 @@ class StudyAgentRuntimeService:
         result = await orchestrator.run(payload)
         result.audit_metadata["chunk_source"] = chunk_source
         result.audit_metadata["fallback_reason"] = fallback_reason
+        result.audit_metadata["index_statuses"] = index_statuses
+        result.audit_metadata["latency_ms"] = round((perf_counter() - started_at) * 1000, 3)
         return result
 
     def _graph_for(self, evidence: tuple[StudyDocumentEvidence, ...]) -> KnowledgeGraph | None:

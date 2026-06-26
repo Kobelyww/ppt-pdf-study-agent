@@ -2,15 +2,18 @@ from __future__ import annotations
 
 from dataclasses import asdict, is_dataclass
 from enum import Enum
+from time import perf_counter
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy.orm import sessionmaker
 
 from src.api.request_context import get_user_context
 from src.security.audit import record_audit_event
 from src.services.study_agent_documents import StudyAgentDocumentError
 from src.services.study_agent_runtime import StudyAgentRuntimeService
+from src.services.study_agent_trace import StudyAgentTraceService
 
 
 class StudyAgentQueryRequest(BaseModel):
@@ -44,20 +47,35 @@ async def query_study_agent(
     payload_data = payload.model_dump(exclude_none=True)
     payload_data["authenticated_user_id"] = context.user_id
     payload_data["request_id"] = context.request_id
+    started_at = perf_counter()
     try:
         result = await runner.run(payload_data)
+        latency_ms = getattr(result, "audit_metadata", {}).get("latency_ms")
+        if latency_ms is None:
+            latency_ms = round((perf_counter() - started_at) * 1000, 3)
     except StudyAgentDocumentError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    trace_payload = _record_study_agent_trace(
+        request,
+        actor_id=context.user_id,
+        request_id=context.request_id,
+        result=result,
+        latency_ms=latency_ms,
+    )
     _record_study_agent_audit(
         request,
         actor_id=context.user_id,
         request_id=context.request_id,
         result=result,
         payload=payload_data,
+        trace_payload=trace_payload,
     )
-    return _to_jsonable(result)
+    response_payload = _to_jsonable(result)
+    if trace_payload is not None:
+        response_payload["trace"] = trace_payload
+    return response_payload
 
 
 def _study_agent_runner(request: Request) -> Any | None:
@@ -90,6 +108,65 @@ def _to_jsonable(value: Any) -> Any:
     return value
 
 
+def _record_study_agent_trace(
+    request: Request,
+    *,
+    actor_id: str,
+    request_id: str,
+    result: Any,
+    latency_ms: int | float,
+) -> dict[str, Any] | None:
+    session_factory = getattr(request.app.state, "session_factory", None)
+    if session_factory is None:
+        return _trace_payload_without_persistence(
+            request_id=request_id,
+            result=result,
+            latency_ms=latency_ms,
+        )
+    service = StudyAgentTraceService(_non_expiring_session_factory(session_factory))
+    audit_metadata = getattr(result, "audit_metadata", {}) or {}
+    return service.record_success(
+        owner_id=actor_id,
+        request_id=request_id,
+        result=result,
+        latency_ms=latency_ms,
+        index_statuses=audit_metadata.get("index_statuses") or {},
+    )
+
+
+def _non_expiring_session_factory(session_factory: Any) -> Any:
+    kwargs = getattr(session_factory, "kw", None)
+    if not isinstance(kwargs, dict) or kwargs.get("expire_on_commit") is False:
+        return session_factory
+
+    return sessionmaker(**{**kwargs, "expire_on_commit": False})
+
+
+def _trace_payload_without_persistence(
+    *,
+    request_id: str,
+    result: Any,
+    latency_ms: int | float,
+) -> dict[str, Any]:
+    audit_metadata = getattr(result, "audit_metadata", {}) or {}
+    return {
+        "trace_id": "trace-unpersisted",
+        "request_id": request_id,
+        "selected_mode": audit_metadata.get("mode"),
+        "route_reason": getattr(result.plan, "reason", None),
+        "chunk_source": audit_metadata.get("chunk_source"),
+        "fallback_reason": audit_metadata.get("fallback_reason"),
+        "document_count": len(getattr(result.request, "document_ids", ()) or ()),
+        "source_count": audit_metadata.get("source_count", len(result.evidence.sources)),
+        "used_chunk_count": result.draft.used_chunk_count,
+        "confidence": result.verification.confidence,
+        "source_recall": result.verification.source_recall,
+        "answer_term_recall": result.verification.answer_term_recall,
+        "needs_review": result.verification.needs_review,
+        "latency_ms": latency_ms,
+    }
+
+
 def _record_study_agent_audit(
     request: Request,
     *,
@@ -97,6 +174,7 @@ def _record_study_agent_audit(
     request_id: str,
     result: Any,
     payload: dict[str, Any],
+    trace_payload: dict[str, Any] | None = None,
 ) -> None:
     session_factory = getattr(request.app.state, "session_factory", None)
     if session_factory is None:
@@ -104,12 +182,20 @@ def _record_study_agent_audit(
 
     audit_metadata = getattr(result, "audit_metadata", {}) or {}
     metadata = {
+        "trace_id": trace_payload.get("trace_id") if trace_payload else None,
         "mode": audit_metadata.get("mode"),
         "target": audit_metadata.get("target"),
         "needs_review": audit_metadata.get("needs_review"),
         "source_count": audit_metadata.get("source_count"),
         "chunk_count": audit_metadata.get("chunk_count"),
         "document_count": len(payload.get("document_ids") or []),
+        "chunk_source": audit_metadata.get("chunk_source")
+        or (trace_payload or {}).get("chunk_source")
+        or "none",
+        "fallback_reason": audit_metadata.get("fallback_reason")
+        or (trace_payload or {}).get("fallback_reason")
+        or "none",
+        "latency_ms": audit_metadata.get("latency_ms") or (trace_payload or {}).get("latency_ms"),
     }
     record_audit_event(
         session_factory=session_factory,
