@@ -10,6 +10,7 @@ from sqlalchemy.pool import StaticPool
 from src.db.models import Base, Document, DocumentArtifactRecord, DocumentChunkRecord
 from src.services.rag_router import RetrievalMode
 from src.services.study_agent_documents import StudyAgentDocumentError, StudyDocumentChunker
+from src.services.study_agent_index import StudyDocumentIndexService
 from src.services.study_agent_runtime import StudyAgentRuntimeService
 
 
@@ -175,6 +176,51 @@ async def test_runtime_fallback_to_artifact_chunking_is_observable():
     assert result.evidence.chunks[0].metadata["source_kind"] == "normalized_document"
     assert result.audit_metadata["chunk_source"] == "fallback"
     assert result.audit_metadata["fallback_reason"] == "persisted_chunks_missing"
+
+
+@pytest.mark.asyncio
+async def test_runtime_falls_back_when_persisted_chunk_set_is_incomplete():
+    Session = _session_factory()
+    _insert_ready_document_with_artifact(
+        Session,
+        content=(
+            "Derivatives measure instantaneous rate of change. "
+            "Gradients extend derivatives to several variables. "
+            "Integrals accumulate signed area over intervals."
+        ),
+    )
+    chunker = StudyDocumentChunker(max_chars=48, overlap_chars=8)
+    index_service = StudyDocumentIndexService(session_factory=Session, chunker=chunker)
+    indexed = index_service.index_document(owner_id="user-1", document_id="doc-study")
+    assert indexed.chunk_count >= 2
+    with Session() as session:
+        row = (
+            session.query(DocumentChunkRecord)
+            .filter(DocumentChunkRecord.document_id == "doc-study")
+            .order_by(DocumentChunkRecord.chunk_index.desc())
+            .first()
+        )
+        session.delete(row)
+        session.commit()
+    runtime = StudyAgentRuntimeService(
+        session_factory=Session,
+        chunker=chunker,
+        index_service=index_service,
+    )
+
+    result = await runtime.run(
+        {
+            "query": "What do derivatives measure?",
+            "target": "answer",
+            "document_ids": ["doc-study"],
+            "authenticated_user_id": "user-1",
+            "request_id": "req-runtime-incomplete-persisted",
+        }
+    )
+
+    assert result.audit_metadata["chunk_source"] == "fallback"
+    assert result.audit_metadata["fallback_reason"] == "persisted_chunks_incomplete"
+    assert result.evidence.chunks[0].metadata["source_kind"] == "normalized_document"
 
 
 @pytest.mark.asyncio

@@ -211,14 +211,34 @@ class StudyDocumentIndexService:
 
             indexed_artifact_id = str(chunks[0].artifact_id)
             indexed_at = max((chunk.updated_at or chunk.created_at) for chunk in chunks)
-            if indexed_artifact_id != latest_artifact.id:
+            artifact_ids = {str(chunk.artifact_id) for chunk in chunks}
+            if artifact_ids != {latest_artifact.id}:
+                stale_artifact_id = next(
+                    artifact_id
+                    for artifact_id in artifact_ids
+                    if artifact_id != latest_artifact.id
+                )
                 return DocumentIndexStatus(
                     document_id=document.id,
                     status="stale",
-                    artifact_id=indexed_artifact_id,
+                    artifact_id=stale_artifact_id,
                     chunk_count=len(chunks),
                     indexed_at=indexed_at,
                     fallback_reason="latest_artifact_not_indexed",
+                )
+
+            if not persisted_chunk_set_is_complete(
+                chunks,
+                document_id=document.id,
+                artifact_id=latest_artifact.id,
+            ):
+                return DocumentIndexStatus(
+                    document_id=document.id,
+                    status="fallback_available",
+                    artifact_id=latest_artifact.id,
+                    chunk_count=len(chunks),
+                    indexed_at=indexed_at,
+                    fallback_reason="persisted_chunks_incomplete",
                 )
 
             return DocumentIndexStatus(
@@ -342,6 +362,80 @@ def _dedupe_nonempty(values: Sequence[str]) -> tuple[str, ...]:
         if normalized:
             seen.setdefault(normalized, None)
     return tuple(seen)
+
+
+def persisted_chunk_set_is_complete(
+    chunks: Sequence[Any],
+    *,
+    document_id: str,
+    artifact_id: str,
+) -> bool:
+    if not chunks:
+        return False
+
+    expected_document_id = str(document_id)
+    expected_artifact_id = str(artifact_id)
+    chunk_indexes: set[int] = set()
+    chunk_count: int | None = None
+
+    for chunk in chunks:
+        row_document_id = _chunk_value(chunk, "document_id")
+        row_artifact_id = _chunk_value(chunk, "artifact_id")
+        metadata = _chunk_metadata(chunk)
+        metadata_document_id = metadata.get("document_id")
+        metadata_artifact_id = metadata.get("artifact_id")
+        metadata_chunk_index = metadata.get("chunk_index")
+        metadata_chunk_count = metadata.get("chunk_count")
+        row_chunk_index = _chunk_value(chunk, "chunk_index", metadata_chunk_index)
+        row_chunk_count = _chunk_value(chunk, "chunk_count", metadata_chunk_count)
+
+        if str(row_document_id or "") != expected_document_id:
+            return False
+        if str(row_artifact_id or "") != expected_artifact_id:
+            return False
+        if str(metadata_document_id or "") != expected_document_id:
+            return False
+        if str(metadata_artifact_id or "") != expected_artifact_id:
+            return False
+
+        try:
+            current_chunk_index = int(row_chunk_index)
+            current_chunk_count = int(row_chunk_count)
+            current_metadata_chunk_index = int(metadata_chunk_index)
+            current_metadata_chunk_count = int(metadata_chunk_count)
+        except (TypeError, ValueError):
+            return False
+
+        if current_chunk_count <= 0:
+            return False
+        if current_metadata_chunk_count != current_chunk_count:
+            return False
+        if current_metadata_chunk_index != current_chunk_index:
+            return False
+        if chunk_count is None:
+            chunk_count = current_chunk_count
+        elif chunk_count != current_chunk_count:
+            return False
+        chunk_indexes.add(current_chunk_index)
+
+    if chunk_count is None or len(chunks) != chunk_count:
+        return False
+    return chunk_indexes == set(range(chunk_count))
+
+
+def _chunk_metadata(chunk: Any) -> dict[str, Any]:
+    if isinstance(chunk, dict):
+        metadata = chunk.get("metadata", {})
+    else:
+        metadata = getattr(chunk, "chunk_metadata", {})
+    return dict(metadata or {})
+
+
+def _chunk_value(chunk: Any, key: str, default: Any = None) -> Any:
+    if isinstance(chunk, dict):
+        metadata = chunk.get("metadata", {})
+        return dict(metadata or {}).get(key, default)
+    return getattr(chunk, key, default)
 
 
 def _content_hash(*, content: str, source: str, artifact_id: str, chunk_index: int) -> str:

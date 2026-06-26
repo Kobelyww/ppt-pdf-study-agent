@@ -351,6 +351,43 @@ def test_index_service_status_reports_missing_index_and_stale_index():
     assert stale.fallback_reason == "latest_artifact_not_indexed"
 
 
+def test_index_service_status_reports_incomplete_persisted_chunk_set_as_fallback():
+    Session = _session_factory()
+    _insert_document(Session, document_id="doc-1", owner_id="user-1")
+    _insert_artifact(
+        Session,
+        artifact_id="artifact-1",
+        document_id="doc-1",
+        content=(
+            "Derivatives measure instantaneous rate of change. "
+            "Gradients extend derivatives to several variables. "
+            "Integrals accumulate signed area over intervals."
+        ),
+        created_at=datetime.now(timezone.utc),
+    )
+    service = StudyDocumentIndexService(
+        session_factory=Session,
+        chunker=StudyDocumentChunker(max_chars=48, overlap_chars=8),
+    )
+    indexed = service.index_document(owner_id="user-1", document_id="doc-1")
+    assert indexed.chunk_count >= 2
+    with Session() as session:
+        row = (
+            session.query(DocumentChunkRecord)
+            .filter(DocumentChunkRecord.document_id == "doc-1")
+            .order_by(DocumentChunkRecord.chunk_index.desc())
+            .first()
+        )
+        session.delete(row)
+        session.commit()
+
+    status = service.status(owner_id="user-1", document_id="doc-1")
+
+    assert status.status == "fallback_available"
+    assert status.artifact_id == "artifact-1"
+    assert status.fallback_reason == "persisted_chunks_incomplete"
+
+
 def test_index_service_load_chunks_filters_owner_and_requested_documents():
     Session = _session_factory()
     _insert_document(Session, document_id="doc-1", owner_id="user-1")

@@ -20,7 +20,10 @@ from src.services.study_agent_documents import (
     StudyDocumentEvidence,
     StudyDocumentEvidenceSource,
 )
-from src.services.study_agent_index import StudyDocumentIndexService
+from src.services.study_agent_index import (
+    StudyDocumentIndexService,
+    persisted_chunk_set_is_complete,
+)
 
 
 class StudyAgentRuntimeService:
@@ -76,23 +79,37 @@ class StudyAgentRuntimeService:
             item.document_id: item.artifact_id for item in evidence
         }
         requested_document_ids = set(requested_artifact_by_document_id)
-        persisted_document_ids = {
-            str(chunk.get("metadata", {}).get("document_id"))
-            for chunk in persisted_chunks
-        }
+        persisted_chunks_by_document_id: dict[str, list[dict[str, Any]]] = {}
+        for chunk in persisted_chunks:
+            document_id = str(chunk.get("metadata", {}).get("document_id") or "")
+            if document_id:
+                persisted_chunks_by_document_id.setdefault(document_id, []).append(chunk)
+        persisted_document_ids = set(persisted_chunks_by_document_id)
         stale_document_ids = {
             document_id
             for document_id, artifact_id in requested_artifact_by_document_id.items()
-            if any(
-                str(chunk.get("metadata", {}).get("document_id")) == document_id
-                and str(chunk.get("metadata", {}).get("artifact_id")) != artifact_id
-                for chunk in persisted_chunks
+            if document_id in persisted_chunks_by_document_id
+            and any(
+                str(chunk.get("metadata", {}).get("artifact_id")) != artifact_id
+                for chunk in persisted_chunks_by_document_id[document_id]
+            )
+        }
+        incomplete_document_ids = {
+            document_id
+            for document_id, artifact_id in requested_artifact_by_document_id.items()
+            if document_id in persisted_chunks_by_document_id
+            and document_id not in stale_document_ids
+            and not persisted_chunk_set_is_complete(
+                persisted_chunks_by_document_id[document_id],
+                document_id=document_id,
+                artifact_id=artifact_id,
             )
         }
         if (
             requested_document_ids
             and requested_document_ids <= persisted_document_ids
             and not stale_document_ids
+            and not incomplete_document_ids
         ):
             chunks = list(persisted_chunks)
             chunk_source = "persisted"
