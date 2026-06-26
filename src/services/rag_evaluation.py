@@ -1,9 +1,12 @@
 import json
 from collections import defaultdict
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from statistics import median
 from uuid import uuid4
+
+from src.db.models import RAGEvaluationCaseScoreRecord, RAGEvaluationRunRecord
 
 
 PRIVATE_FIXTURE_KEYS = {
@@ -171,8 +174,13 @@ class RAGEvaluator:
 
 
 class RAGQualityEvaluationService:
-    def __init__(self, report_dir: str | Path) -> None:
+    def __init__(
+        self,
+        report_dir: str | Path = "docs/evaluation",
+        session_factory=None,
+    ) -> None:
         self.report_dir = Path(report_dir)
+        self.session_factory = session_factory
         self.evaluator = RAGEvaluator()
 
     def run_fixture_file(
@@ -224,6 +232,18 @@ class RAGQualityEvaluationService:
         )
         report_markdown_path.write_text(_markdown_report(payload), encoding="utf-8")
 
+        if self.session_factory is not None:
+            self._persist_run(
+                run_id=run_id,
+                created_by=created_by,
+                fixture_version=Path(fixture_path).name,
+                modes=modes,
+                case_count=len(cases),
+                summary=summary,
+                report_uri=str(report_markdown_path),
+                score_rows=score_rows,
+            )
+
         return RAGEvaluationRun(
             id=run_id,
             created_by=created_by,
@@ -236,6 +256,52 @@ class RAGQualityEvaluationService:
             report_json_path=report_json_path,
             report_markdown_path=report_markdown_path,
         )
+
+    def _persist_run(
+        self,
+        *,
+        run_id: str,
+        created_by: str,
+        fixture_version: str,
+        modes: list[str],
+        case_count: int,
+        summary: dict,
+        report_uri: str,
+        score_rows: list[dict],
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            record = RAGEvaluationRunRecord(
+                id=run_id,
+                created_by=created_by,
+                fixture_version=fixture_version,
+                modes=list(modes),
+                case_count=case_count,
+                status="completed",
+                summary=summary,
+                report_uri=report_uri,
+                created_at=now,
+                completed_at=now,
+            )
+            for index, row in enumerate(score_rows):
+                record.scores.append(
+                    RAGEvaluationCaseScoreRecord(
+                        id=f"{run_id}:score:{index}",
+                        case_id=row["case_id"],
+                        mode=row["mode"],
+                        category=row["category"],
+                        source_recall=row["source_recall"],
+                        answer_term_recall=row["answer_term_recall"],
+                        answer_coverage=row["answer_coverage"],
+                        latency_ms=row["latency_ms"],
+                        estimated_cost=row["estimated_cost"],
+                        needs_review=row["needs_review"],
+                        fallback_reason=row["fallback_reason"],
+                        error_code=None,
+                    )
+                )
+            session.add(record)
+            session.commit()
 
     def _score_case(self, case: RAGEvalCase, mode: str) -> RAGEvalScore:
         latency_ms, token_cost = {

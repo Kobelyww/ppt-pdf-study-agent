@@ -2,7 +2,9 @@ import json
 from pathlib import Path
 
 import pytest
+from sqlalchemy import create_engine
 
+from src.db import Base, RAGEvaluationRunRecord, create_session_factory
 from src.services.rag_evaluation import (
     RAGEvaluator,
     RAGEvalCase,
@@ -244,6 +246,32 @@ def test_rag_quality_evaluation_service_runs_modes_and_writes_reports(tmp_path):
     assert all(expected_score_keys.issubset(score) for score in payload["scores"])
     assert run.report_markdown_path.exists()
     assert "Mode Comparison" in run.report_markdown_path.read_text(encoding="utf-8")
+
+
+def test_rag_quality_evaluation_service_persists_runs_and_case_scores(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'eval.db'}")
+    Base.metadata.create_all(engine)
+    Session = create_session_factory(engine)
+    fixture_path = Path(__file__).parent / "fixtures" / "rag_eval_set.json"
+    service = RAGQualityEvaluationService(
+        report_dir=tmp_path / "reports",
+        session_factory=Session,
+    )
+
+    run = service.run_fixture_file(
+        fixture_path,
+        modes=["simple_rag", "graph_rag_lite"],
+        created_by="admin-1",
+    )
+
+    with Session() as session:
+        record = session.get(RAGEvaluationRunRecord, run.id)
+        assert record is not None
+        assert record.created_by == "admin-1"
+        assert record.status == "completed"
+        assert record.case_count == 4
+        assert len(record.scores) == 8
+        assert record.report_uri.endswith(".md")
 
 
 def test_rag_quality_evaluation_reports_readiness_gates(tmp_path):
