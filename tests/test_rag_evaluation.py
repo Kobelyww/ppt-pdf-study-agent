@@ -1,7 +1,11 @@
-import json
 from pathlib import Path
 
-from src.services.rag_evaluation import RAGEvaluator, RAGEvalCase
+from src.services.rag_evaluation import (
+    RAGEvaluator,
+    RAGEvalCase,
+    RAGQualityEvaluationService,
+    load_rag_eval_cases,
+)
 
 
 def test_rag_evaluator_scores_terms_and_sources():
@@ -137,24 +141,52 @@ def test_rag_evaluator_handles_none_answer_and_sources():
 def test_rag_evaluation_fixture_loads_expected_cases():
     fixture_path = Path(__file__).parent / "fixtures" / "rag_eval_set.json"
 
-    cases = json.loads(fixture_path.read_text(encoding="utf-8"))
-    required_keys = {
-        "id",
-        "query",
-        "category",
-        "expected_sources",
-        "expected_terms",
-    }
+    cases = load_rag_eval_cases(fixture_path)
 
     assert len(cases) == 4
-    assert all(set(case) == required_keys for case in cases)
-    assert {case["category"] for case in cases} == {
+    assert {case.category for case in cases} == {
         "definition",
         "formula_lookup",
         "concept_relation",
         "question_generation",
     }
-    assert all(case["id"] for case in cases)
-    assert all(case["query"] for case in cases)
-    assert all(case["expected_sources"] for case in cases)
-    assert all(case["expected_terms"] for case in cases)
+    assert cases[0].target == "answer"
+    assert cases[0].document_fixture_ids == ["calculus-basics"]
+    assert "simple_rag" in cases[0].preferred_modes
+    assert all(case.expected_sources for case in cases)
+    assert all(case.expected_terms for case in cases)
+
+
+def test_rag_quality_evaluation_service_runs_modes_and_writes_reports(tmp_path):
+    fixture_path = Path(__file__).parent / "fixtures" / "rag_eval_set.json"
+    service = RAGQualityEvaluationService(report_dir=tmp_path)
+
+    run = service.run_fixture_file(
+        fixture_path,
+        modes=["simple_rag", "graph_rag_lite"],
+        created_by="admin-1",
+    )
+
+    assert run.id.startswith("eval-run-")
+    assert run.case_count == 4
+    assert set(run.modes) == {"simple_rag", "graph_rag_lite"}
+    assert run.summary["simple_rag"]["case_count"] == 4
+    assert run.summary["graph_rag_lite"]["case_count"] == 4
+    assert run.report_json_path.exists()
+    assert run.report_markdown_path.exists()
+    assert "Mode Comparison" in run.report_markdown_path.read_text(encoding="utf-8")
+
+
+def test_rag_quality_evaluation_reports_readiness_gates(tmp_path):
+    fixture_path = Path(__file__).parent / "fixtures" / "rag_eval_set.json"
+    service = RAGQualityEvaluationService(report_dir=tmp_path)
+
+    run = service.run_fixture_file(
+        fixture_path,
+        modes=["simple_rag", "agentic_rag"],
+        created_by="admin-1",
+    )
+
+    readiness = run.readiness["agentic_rag"]
+    assert readiness["overall"] in {"candidate", "hold", "insufficient_data"}
+    assert "question_generation" in readiness["by_category"]

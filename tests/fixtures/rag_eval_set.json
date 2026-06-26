@@ -2,29 +2,49 @@
   {
     "id": "def-001",
     "query": "什么是导数？",
+    "target": "answer",
     "category": "definition",
+    "document_fixture_ids": ["calculus-basics"],
     "expected_sources": ["calculus:derivative"],
-    "expected_terms": ["变化率", "函数"]
+    "expected_terms": ["变化率", "函数"],
+    "preferred_modes": ["simple_rag", "graph_rag_lite", "agentic_rag"],
+    "budget": "balanced",
+    "ideal_answer": "导数描述函数在某一点附近的变化率。"
   },
   {
     "id": "formula-001",
     "query": "链式法则公式是什么？",
+    "target": "answer",
     "category": "formula_lookup",
+    "document_fixture_ids": ["calculus-basics"],
     "expected_sources": ["calculus:chain_rule"],
-    "expected_terms": ["f(g(x))", "g'(x)"]
+    "expected_terms": ["f(g(x))", "g'(x)"],
+    "preferred_modes": ["simple_rag", "graph_rag_lite"],
+    "budget": "balanced",
+    "ideal_answer": "链式法则可写为 (f(g(x)))' = f'(g(x))g'(x)。"
   },
   {
     "id": "relation-001",
     "query": "导数和梯度有什么关系？",
+    "target": "answer",
     "category": "concept_relation",
+    "document_fixture_ids": ["calculus-basics"],
     "expected_sources": ["calculus:gradient"],
-    "expected_terms": ["多变量", "方向"]
+    "expected_terms": ["多变量", "方向"],
+    "preferred_modes": ["simple_rag", "graph_rag_lite", "agentic_rag"],
+    "budget": "balanced",
+    "ideal_answer": "梯度是多变量函数各方向导数信息的向量表示。"
   },
   {
     "id": "synthesis-001",
     "query": "基于导数和矩阵出一道综合题",
+    "target": "question",
     "category": "question_generation",
+    "document_fixture_ids": ["calculus-basics", "linear-algebra-basics"],
     "expected_sources": ["calculus:derivative", "linear_algebra:matrix"],
-    "expected_terms": ["题目", "答案"]
+    "expected_terms": ["题目", "答案"],
+    "preferred_modes": ["simple_rag", "agentic_rag"],
+    "budget": "high",
+    "ideal_answer": "题目应同时使用导数和矩阵，并给出答案。"
   }
 ]
