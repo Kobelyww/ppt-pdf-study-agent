@@ -336,6 +336,26 @@ function StudyAgentPanel({
               </span>
             </div>
           ) : null}
+          {result.policy ? (
+            <div className="study-agent-policy" aria-label="Study Agent policy diagnostics">
+              <span>
+                <strong>Policy status</strong> {result.policy.status ?? "unknown"}
+              </span>
+              <span>
+                <strong>Mode</strong> {result.policy.selected_mode ?? "unknown"}
+              </span>
+              {result.policy.category ? (
+                <span>
+                  <strong>Category</strong> {result.policy.category}
+                </span>
+              ) : null}
+              {result.policy.blocked_reason ? (
+                <span className="study-agent-policy-warning">
+                  {result.policy.blocked_reason}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
           {result.trace?.fallback_reason ? (
             <div className="warning-banner compact" role="status">
               Evidence index fallback: {result.trace.fallback_reason}
