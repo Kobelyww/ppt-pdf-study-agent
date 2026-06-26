@@ -5,6 +5,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -340,3 +341,93 @@ class AuditEventRecord(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )
+
+
+class StudyAgentTraceRecord(Base):
+    __tablename__ = "study_agent_traces"
+    __table_args__ = (
+        Index("ix_study_agent_traces_owner_created", "owner_id", "created_at"),
+        Index("ix_study_agent_traces_owner_request", "owner_id", "request_id"),
+        Index("ix_study_agent_traces_owner_query_hash", "owner_id", "query_hash"),
+        Index(
+            "ix_study_agent_traces_owner_mode_created",
+            "owner_id",
+            "selected_mode",
+            "created_at",
+        ),
+        Index("ix_study_agent_traces_review_created", "needs_review", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    document_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    selected_mode: Mapped[str] = mapped_column(String(64), nullable=False)
+    query_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    fallback_chain: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    retrieval_latency_ms: Mapped[Optional[float]] = mapped_column(Float)
+    generation_latency_ms: Mapped[Optional[float]] = mapped_column(Float)
+    total_latency_ms: Mapped[Optional[float]] = mapped_column(Float)
+    retrieved_chunk_count: Mapped[Optional[int]] = mapped_column(Integer)
+    selected_chunk_count: Mapped[Optional[int]] = mapped_column(Integer)
+    needs_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    trace_metadata: Mapped[dict] = mapped_column("metadata", JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+
+class RAGEvaluationRunRecord(Base):
+    __tablename__ = "rag_evaluation_runs"
+    __table_args__ = (
+        Index("ix_rag_eval_runs_created_by_created", "created_by", "created_at"),
+        Index("ix_rag_eval_runs_status_created", "status", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    created_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
+    document_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    modes: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    case_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    summary: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    average_relevance: Mapped[Optional[float]] = mapped_column(Float)
+    average_groundedness: Mapped[Optional[float]] = mapped_column(Float)
+    average_completeness: Mapped[Optional[float]] = mapped_column(Float)
+    average_latency_ms: Mapped[Optional[float]] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+    scores: Mapped[List["RAGEvaluationCaseScoreRecord"]] = relationship(
+        back_populates="run", cascade="all, delete-orphan"
+    )
+
+
+class RAGEvaluationCaseScoreRecord(Base):
+    __tablename__ = "rag_evaluation_case_scores"
+    __table_args__ = (
+        Index("ix_rag_eval_scores_run_mode", "run_id", "mode"),
+        Index("ix_rag_eval_scores_run_category", "run_id", "category"),
+        Index("ix_rag_eval_scores_mode_category", "mode", "category"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("rag_evaluation_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    case_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    mode: Mapped[str] = mapped_column(String(64), nullable=False)
+    category: Mapped[str] = mapped_column(String(128), nullable=False)
+    relevance: Mapped[Optional[float]] = mapped_column(Float)
+    groundedness: Mapped[Optional[float]] = mapped_column(Float)
+    completeness: Mapped[Optional[float]] = mapped_column(Float)
+    latency_ms: Mapped[Optional[float]] = mapped_column(Float)
+    retrieved_chunk_count: Mapped[Optional[int]] = mapped_column(Integer)
+    selected_chunk_count: Mapped[Optional[int]] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+    run: Mapped[RAGEvaluationRunRecord] = relationship(back_populates="scores")

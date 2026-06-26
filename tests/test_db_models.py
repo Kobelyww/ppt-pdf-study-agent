@@ -15,7 +15,10 @@ from src.db import (
     ParsedSection,
     ProcessingJob,
     QuestionRecord,
+    RAGEvaluationCaseScoreRecord,
+    RAGEvaluationRunRecord,
     ReviewTaskRecord,
+    StudyAgentTraceRecord,
     ContentVersionRecord,
     create_session_factory,
     DocumentChunkRecord,
@@ -265,3 +268,79 @@ def test_mvp7_product_records_create_and_preserve_metadata_columns(tmp_path):
         assert chunk.created_at is not None
         assert chunk.updated_at is not None
         assert audit.event_metadata == {"filename": "Lecture Notes.pdf"}
+
+
+def test_rag_quality_observability_records_create_and_preserve_safe_metadata(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'rag_quality.db'}")
+    Base.metadata.create_all(engine)
+    SessionFactory = create_session_factory(engine)
+
+    with SessionFactory() as session:
+        trace = StudyAgentTraceRecord(
+            id="trace-1",
+            owner_id="user-1",
+            request_id="req-1",
+            document_ids=["doc-1", "doc-2"],
+            selected_mode="hybrid",
+            query_hash="sha256:query",
+            fallback_chain=["hybrid", "keyword"],
+            retrieval_latency_ms=12.5,
+            generation_latency_ms=34.75,
+            total_latency_ms=47.25,
+            retrieved_chunk_count=8,
+            selected_chunk_count=4,
+            needs_review=True,
+            trace_metadata={"experiment": "rag-quality"},
+        )
+        run = RAGEvaluationRunRecord(
+            id="eval-run-1",
+            created_by="user-1",
+            status="completed",
+            document_ids=["doc-1"],
+            modes=["semantic", "hybrid"],
+            case_count=2,
+            summary={"best_mode": "hybrid"},
+            average_relevance=0.91,
+            average_groundedness=0.82,
+            average_completeness=0.73,
+            average_latency_ms=50.5,
+        )
+        score = RAGEvaluationCaseScoreRecord(
+            id="eval-score-1",
+            run=run,
+            case_id="case-1",
+            mode="hybrid",
+            category="definition",
+            relevance=0.95,
+            groundedness=0.85,
+            completeness=0.75,
+            latency_ms=44.25,
+            retrieved_chunk_count=5,
+            selected_chunk_count=3,
+        )
+        session.add_all([trace, run, score])
+        session.commit()
+
+    with Session(engine) as session:
+        trace = session.get(StudyAgentTraceRecord, "trace-1")
+        run = session.get(RAGEvaluationRunRecord, "eval-run-1")
+        score = session.get(RAGEvaluationCaseScoreRecord, "eval-score-1")
+
+        assert trace is not None
+        assert trace.document_ids == ["doc-1", "doc-2"]
+        assert trace.fallback_chain == ["hybrid", "keyword"]
+        assert trace.trace_metadata == {"experiment": "rag-quality"}
+        assert trace.needs_review is True
+        assert trace.total_latency_ms == 47.25
+
+        assert run is not None
+        assert run.document_ids == ["doc-1"]
+        assert run.modes == ["semantic", "hybrid"]
+        assert run.summary == {"best_mode": "hybrid"}
+        assert run.scores[0].id == "eval-score-1"
+        assert run.average_relevance == 0.91
+
+        assert score is not None
+        assert score.run_id == "eval-run-1"
+        assert score.run.summary == {"best_mode": "hybrid"}
+        assert score.relevance == 0.95

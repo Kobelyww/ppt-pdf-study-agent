@@ -12,7 +12,10 @@ from .models import (
     ParsedSection,
     ProcessingJob,
     QuestionRecord,
+    RAGEvaluationCaseScoreRecord,
+    RAGEvaluationRunRecord,
     ReviewTaskRecord,
+    StudyAgentTraceRecord,
     UserRecord,
 )
 from .session import create_session_factory, get_engine
@@ -31,7 +34,10 @@ __all__ = [
     "ParsedSection",
     "ProcessingJob",
     "QuestionRecord",
+    "RAGEvaluationCaseScoreRecord",
+    "RAGEvaluationRunRecord",
     "ReviewTaskRecord",
+    "StudyAgentTraceRecord",
     "UserRecord",
     "create_session_factory",
     "get_engine",

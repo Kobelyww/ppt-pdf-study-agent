@@ -90,6 +90,15 @@ def test_alembic_upgrade_creates_orm_compatible_sqlite_schema(tmp_path, monkeypa
     artifact_columns = {column["name"] for column in inspector.get_columns("document_artifacts")}
     audit_event_columns = {column["name"] for column in inspector.get_columns("audit_events")}
     chunk_columns = {column["name"]: column for column in inspector.get_columns("document_chunks")}
+    trace_columns = {
+        column["name"] for column in inspector.get_columns("study_agent_traces")
+    }
+    eval_run_columns = {
+        column["name"] for column in inspector.get_columns("rag_evaluation_runs")
+    }
+    eval_score_columns = {
+        column["name"] for column in inspector.get_columns("rag_evaluation_case_scores")
+    }
     question_fks = inspector.get_foreign_keys("questions")
 
     assert {"id", "owner_id", "title", "source_type", "storage_uri", "content_hash", "status", "updated_at"}.issubset(columns)
@@ -117,6 +126,73 @@ def test_alembic_upgrade_creates_orm_compatible_sqlite_schema(tmp_path, monkeypa
     chunk_indexes = {index["name"] for index in inspector.get_indexes("document_chunks")}
     assert "ix_document_chunks_owner_document" in chunk_indexes
     assert "ix_document_chunks_document_artifact" in chunk_indexes
+    assert {
+        "id",
+        "owner_id",
+        "request_id",
+        "document_ids",
+        "selected_mode",
+        "query_hash",
+        "fallback_chain",
+        "retrieval_latency_ms",
+        "generation_latency_ms",
+        "total_latency_ms",
+        "retrieved_chunk_count",
+        "selected_chunk_count",
+        "needs_review",
+        "metadata",
+        "created_at",
+    }.issubset(trace_columns)
+    assert {
+        "id",
+        "created_by",
+        "status",
+        "document_ids",
+        "modes",
+        "case_count",
+        "summary",
+        "average_relevance",
+        "average_groundedness",
+        "average_completeness",
+        "average_latency_ms",
+        "created_at",
+        "completed_at",
+    }.issubset(eval_run_columns)
+    assert {
+        "id",
+        "run_id",
+        "case_id",
+        "mode",
+        "category",
+        "relevance",
+        "groundedness",
+        "completeness",
+        "latency_ms",
+        "retrieved_chunk_count",
+        "selected_chunk_count",
+        "created_at",
+    }.issubset(eval_score_columns)
+    trace_indexes = {index["name"] for index in inspector.get_indexes("study_agent_traces")}
+    eval_run_indexes = {index["name"] for index in inspector.get_indexes("rag_evaluation_runs")}
+    eval_score_indexes = {
+        index["name"] for index in inspector.get_indexes("rag_evaluation_case_scores")
+    }
+    assert {
+        "ix_study_agent_traces_owner_created",
+        "ix_study_agent_traces_owner_request",
+        "ix_study_agent_traces_owner_query_hash",
+        "ix_study_agent_traces_owner_mode_created",
+        "ix_study_agent_traces_review_created",
+    }.issubset(trace_indexes)
+    assert {
+        "ix_rag_eval_runs_created_by_created",
+        "ix_rag_eval_runs_status_created",
+    }.issubset(eval_run_indexes)
+    assert {
+        "ix_rag_eval_scores_run_mode",
+        "ix_rag_eval_scores_run_category",
+        "ix_rag_eval_scores_mode_category",
+    }.issubset(eval_score_indexes)
     chunk_unique_constraints = {
         constraint["name"] for constraint in inspector.get_unique_constraints("document_chunks")
     }
