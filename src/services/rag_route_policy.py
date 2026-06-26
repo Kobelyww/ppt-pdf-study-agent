@@ -73,7 +73,7 @@ class RAGRoutePolicyService:
         *,
         router_decision: RetrievalDecision,
         readiness: RAGReadinessSnapshot | None,
-        index_statuses: list[str],
+        index_statuses: dict[str, dict[str, Any]] | None,
         budget: str,
         preferred_mode: RetrievalMode | None = None,
     ) -> RAGRoutePolicyDecision:
@@ -152,7 +152,7 @@ class RAGRoutePolicyService:
         mode: RetrievalMode,
         category: QueryCategory,
         readiness: RAGReadinessSnapshot | None,
-        index_statuses: list[str],
+        index_statuses: dict[str, dict[str, Any]] | None,
         budget: str,
     ) -> tuple[str, str] | None:
         if not self.config.advanced_routing_enabled:
@@ -186,10 +186,13 @@ class RAGRoutePolicyService:
                 f"agentic_rag requires {self.config.max_budget_for_agentic} budget",
             )
 
-        if (
-            self.config.require_persisted_chunks_for_advanced
-            and any(status != "indexed" for status in index_statuses)
-        ):
+        index_statuses = index_statuses or {}
+        unhealthy = [
+            payload.get("status")
+            for payload in index_statuses.values()
+            if payload.get("status") != "indexed"
+        ]
+        if self.config.require_persisted_chunks_for_advanced and unhealthy:
             return (
                 "blocked_by_index_health",
                 "persisted chunks are required for advanced routing",

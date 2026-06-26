@@ -34,12 +34,16 @@ def _snapshot(graph_status="candidate", agentic_status="hold"):
     )
 
 
+def _index_status(status="indexed"):
+    return {"doc-1": {"status": status}}
+
+
 def test_simple_rag_allowed_when_advanced_routing_disabled():
     service = RAGRoutePolicyService()
     decision = service.decide(
         router_decision=_decision(RetrievalMode.SIMPLE, QueryCategory.DEFINITION),
         readiness=None,
-        index_statuses=["missing"],
+        index_statuses=_index_status("missing"),
         budget="low",
     )
 
@@ -61,7 +65,7 @@ def test_graph_selected_only_when_flag_and_readiness_allow_category():
     decision = service.decide(
         router_decision=_decision(RetrievalMode.GRAPH, QueryCategory.LEARNING_PATH),
         readiness=_snapshot(),
-        index_statuses=["indexed"],
+        index_statuses=_index_status(),
         budget="medium",
     )
 
@@ -70,6 +74,26 @@ def test_graph_selected_only_when_flag_and_readiness_allow_category():
     assert decision.readiness_status == "candidate"
     assert decision.experiment_enabled is True
     assert decision.fallback_chain == [RetrievalMode.SIMPLE]
+
+
+def test_dict_shaped_healthy_index_status_does_not_block_graph_selection():
+    service = RAGRoutePolicyService(
+        RAGRoutePolicyConfig(
+            advanced_routing_enabled=True,
+            graph_rag_enabled=True,
+            enabled_categories=frozenset({"learning_path"}),
+        )
+    )
+
+    decision = service.decide(
+        router_decision=_decision(RetrievalMode.GRAPH, QueryCategory.LEARNING_PATH),
+        readiness=_snapshot(),
+        index_statuses={"doc-1": {"status": "indexed"}},
+        budget="medium",
+    )
+
+    assert decision.selected_mode == RetrievalMode.GRAPH
+    assert decision.status == "allowed"
 
 
 def test_agentic_blocked_when_readiness_holds_category():
@@ -87,7 +111,7 @@ def test_agentic_blocked_when_readiness_holds_category():
             QueryCategory.QUESTION_GENERATION,
         ),
         readiness=_snapshot(agentic_status="hold"),
-        index_statuses=["indexed"],
+        index_statuses=_index_status(),
         budget="high",
     )
 
@@ -110,7 +134,7 @@ def test_no_readiness_snapshot_blocks_advanced_modes():
     decision = service.decide(
         router_decision=_decision(RetrievalMode.GRAPH, QueryCategory.LEARNING_PATH),
         readiness=None,
-        index_statuses=["indexed"],
+        index_statuses=_index_status(),
         budget="medium",
     )
 
@@ -125,7 +149,7 @@ def test_user_preferred_mode_cannot_override_default_policy():
     decision = service.decide(
         router_decision=_decision(RetrievalMode.GRAPH, QueryCategory.LEARNING_PATH),
         readiness=_snapshot(),
-        index_statuses=["indexed"],
+        index_statuses=_index_status(),
         budget="medium",
         preferred_mode=RetrievalMode.GRAPH,
     )
@@ -148,7 +172,10 @@ def test_index_health_blocks_advanced_when_persisted_chunks_required():
     decision = service.decide(
         router_decision=_decision(RetrievalMode.GRAPH, QueryCategory.LEARNING_PATH),
         readiness=_snapshot(),
-        index_statuses=["indexed", "stale"],
+        index_statuses={
+            "doc-1": {"status": "indexed"},
+            "doc-2": {"status": "stale"},
+        },
         budget="medium",
     )
 
@@ -169,7 +196,7 @@ def test_to_safe_dict_excludes_private_content_keys():
     decision = service.decide(
         router_decision=_decision(RetrievalMode.GRAPH, QueryCategory.LEARNING_PATH),
         readiness=_snapshot(),
-        index_statuses=["indexed"],
+        index_statuses=_index_status(),
         budget="medium",
     )
 
@@ -195,7 +222,7 @@ def test_agentic_allowed_when_all_policy_gates_pass():
             QueryCategory.QUESTION_GENERATION,
         ),
         readiness=_snapshot(agentic_status="candidate"),
-        index_statuses=["indexed"],
+        index_statuses=_index_status(),
         budget="high",
     )
 
