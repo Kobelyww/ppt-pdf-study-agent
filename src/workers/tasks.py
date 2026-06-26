@@ -13,6 +13,7 @@ from src.db.models import (
     ExportJobRecord,
     ProcessingJob,
 )
+from src.services.study_agent_index import StudyDocumentIndexService
 from src.services.version_service import create_persisted_version
 from src.storage.backend import StorageBackend
 
@@ -118,10 +119,11 @@ def run_product_document_task(
         outline = _build_outline(normalized)
         questions = _build_questions(normalized)
 
+        artifact_id = f"artifact:{document_id}:normalized:{uuid4().hex}"
         with session_factory() as session:
             session.add(
                 DocumentArtifactRecord(
-                    id=f"artifact:{document_id}:normalized:{uuid4().hex}",
+                    id=artifact_id,
                     document_id=document_id,
                     artifact_type="normalized_document",
                     content=normalized,
@@ -130,6 +132,13 @@ def run_product_document_task(
                 )
             )
             session.commit()
+
+        StudyDocumentIndexService(session_factory=session_factory).index_artifact(
+            owner_id=owner_id,
+            document_id=document_id,
+            artifact_id=artifact_id,
+            require_ready=False,
+        )
 
         create_persisted_version(
             session_factory=session_factory,
