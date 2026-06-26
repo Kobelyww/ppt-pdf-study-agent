@@ -538,7 +538,7 @@ def test_admin_rag_evaluation_api_creates_run(tmp_path: Path):
     payload = response.json()
     assert payload["id"].startswith("eval-run-")
     assert payload["modes"] == ["simple_rag"]
-    assert payload["case_count"] == 4
+    assert payload["case_count"] == 9
     assert "summary" in payload
     assert "readiness" in payload
 
@@ -566,7 +566,7 @@ def test_admin_rag_evaluation_api_gets_run_metadata_and_requires_admin(tmp_path:
     assert payload["id"] == run_id
     assert payload["status"] == "completed"
     assert payload["created_by"] == "admin-1"
-    assert payload["case_count"] == 4
+    assert payload["case_count"] == 9
     assert payload["summary"]
     assert "readiness" in payload
     assert payload["report_uri"]
