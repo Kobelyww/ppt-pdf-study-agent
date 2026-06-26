@@ -102,14 +102,11 @@ def _trace_payload(
     payload = {
         "trace_id": record.id,
         "request_id": record.request_id,
-        "target": record.target,
-        "document_ids": record.document_ids,
         "selected_mode": record.selected_mode,
         "route_reason": record.route_reason,
-        "estimated_cost": record.estimated_cost,
-        "fallback_chain": record.fallback_chain,
         "chunk_source": record.chunk_source,
         "fallback_reason": record.fallback_reason,
+        "document_count": len(record.document_ids or []),
         "source_count": record.source_count,
         "used_chunk_count": record.used_chunk_count,
         "confidence": record.confidence,
@@ -117,7 +114,6 @@ def _trace_payload(
         "answer_term_recall": record.answer_term_recall,
         "needs_review": record.needs_review,
         "latency_ms": record.latency_ms,
-        "created_at": record.created_at.isoformat() if record.created_at else None,
     }
     if include_hash:
         payload["query_hash"] = record.query_hash

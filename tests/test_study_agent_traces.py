@@ -110,13 +110,29 @@ def test_record_success_persists_safe_study_agent_trace():
         },
     )
 
+    assert set(payload) == {
+        "trace_id",
+        "request_id",
+        "selected_mode",
+        "route_reason",
+        "chunk_source",
+        "fallback_reason",
+        "document_count",
+        "source_count",
+        "used_chunk_count",
+        "confidence",
+        "source_recall",
+        "answer_term_recall",
+        "needs_review",
+        "latency_ms",
+    }
     assert payload["trace_id"]
     assert payload["request_id"] == "req-1"
     assert payload["selected_mode"] == "simple_rag"
     assert payload["route_reason"] == "definition or direct lookup query"
-    assert payload["estimated_cost"] == "low"
     assert payload["chunk_source"] == "document:doc-1:chunk:0"
     assert payload["fallback_reason"] == "primary index available"
+    assert payload["document_count"] == 1
     assert payload["source_count"] == 1
     assert payload["used_chunk_count"] == 1
     assert payload["confidence"] == 0.8
@@ -211,9 +227,27 @@ def test_get_trace_is_scoped_to_owner_and_can_include_query_hash():
     other_owner_payload = service.get_trace("owner-2", created["trace_id"])
 
     assert owner_payload is not None
+    assert set(owner_payload) == {
+        "trace_id",
+        "request_id",
+        "selected_mode",
+        "route_reason",
+        "chunk_source",
+        "fallback_reason",
+        "document_count",
+        "source_count",
+        "used_chunk_count",
+        "confidence",
+        "source_recall",
+        "answer_term_recall",
+        "needs_review",
+        "latency_ms",
+        "query_hash",
+    }
     assert owner_payload["trace_id"] == created["trace_id"]
     assert owner_payload["request_id"] == "req-1"
     assert owner_payload["selected_mode"] == "simple_rag"
+    assert owner_payload["document_count"] == 1
     assert owner_payload["query_hash"].startswith("sha256:")
     assert "什么是导数？" not in json.dumps(owner_payload, ensure_ascii=False)
     assert other_owner_payload is None
