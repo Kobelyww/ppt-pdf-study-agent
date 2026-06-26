@@ -86,6 +86,60 @@ class FailingStudyAgentOrchestrator:
         raise ValueError("bad study request")
 
 
+@dataclass
+class SensitivePolicyStudyAgentOrchestrator:
+    async def run(self, payload: dict) -> StudyAgentResult:
+        request = StudyRequest(query=payload["query"], target=StudyTarget.ANSWER)
+        evidence = EvidenceBundle(
+            mode=RetrievalMode.SIMPLE,
+            chunks=(Chunk(content="导数描述函数的变化率。", source="calculus:derivative"),),
+            sources=("calculus:derivative",),
+            concept_ids=("kp-derivative",),
+            confidence=0.8,
+            reason="simple token-overlap retrieval",
+        )
+        return StudyAgentResult(
+            request=request,
+            plan=StudyPlan(
+                mode=RetrievalMode.SIMPLE,
+                reason="definition or direct lookup query",
+                steps=("retrieve_chunks",),
+                estimated_cost="low",
+            ),
+            evidence=evidence,
+            draft=StudyDraft(
+                target=StudyTarget.ANSWER,
+                content="导数描述函数的变化率。",
+                citations=("calculus:derivative",),
+                used_chunk_count=1,
+            ),
+            verification=StudyVerification(
+                passed=True,
+                needs_review=False,
+                confidence=0.8,
+                issues=(),
+                source_recall=1.0,
+                answer_term_recall=1.0,
+            ),
+            audit_metadata={
+                "mode": "simple_rag",
+                "target": "answer",
+                "needs_review": False,
+                "source_count": 1,
+                "chunk_count": 1,
+                "policy": {
+                    "selected_mode": "simple_rag",
+                    "router_mode": "simple_rag",
+                    "status": "allowed",
+                    "reason": "用户问：什么是导数？",
+                    "blocked_reason": "raw chunk: 导数描述函数的变化率。",
+                    "fallback_chain": ["simple_rag", "secret-token"],
+                    "policy_version": "rag-policy-v1",
+                },
+            },
+        )
+
+
 def _session_factory():
     engine = create_engine(
         "sqlite:///:memory:",
@@ -365,6 +419,64 @@ def test_study_agent_query_returns_trace_payload(tmp_path: Path):
     ]
 
 
+def test_study_agent_query_audit_has_not_applied_policy_for_injected_orchestrator(
+    tmp_path: Path,
+):
+    client, _orchestrator, Session, _document_service = _client(tmp_path)
+    headers = _login(client)
+
+    response = client.post(
+        "/api/study-agent/query",
+        json={"query": "什么是导数？"},
+        headers={**headers, "x-request-id": "req-study-no-policy"},
+    )
+
+    assert response.status_code == 200
+    with Session() as session:
+        event = (
+            session.query(AuditEventRecord)
+            .filter(AuditEventRecord.action == "study_agent.query")
+            .one()
+        )
+
+    assert event.event_metadata["selected_mode"] == "simple_rag"
+    assert event.event_metadata["policy_status"] == "not_applied"
+    assert "policy" not in event.event_metadata
+
+
+def test_study_agent_query_response_does_not_expose_raw_audit_metadata_policy():
+    app = create_app(
+        secret_key="test-secret",
+        allow_dev_user_header=True,
+        study_agent_orchestrator=SensitivePolicyStudyAgentOrchestrator(),
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/study-agent/query",
+        json={"query": "什么是导数？"},
+        headers={"x-user-id": "user-1", "x-request-id": "req-study-sensitive-policy"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    serialized = response.text
+    assert "audit_metadata" not in payload
+    assert payload["policy"] == {
+        "selected_mode": "simple_rag",
+        "router_mode": "simple_rag",
+        "status": "allowed",
+        "fallback_chain": ["simple_rag"],
+        "policy_version": "rag-policy-v1",
+    }
+    for value in [
+        "用户问",
+        "raw chunk",
+        "secret-token",
+    ]:
+        assert value not in serialized
+
+
 def test_trace_detail_api_returns_owner_scoped_safe_trace(tmp_path: Path):
     client, _orchestrator, _Session, _document_service = _client(tmp_path)
     headers = _login(client)
@@ -591,7 +703,13 @@ def test_study_agent_query_validates_payload(tmp_path: Path):
 
 
 def test_study_agent_query_persists_sanitized_audit_event(tmp_path: Path):
-    client, _orchestrator, Session, _document_service = _client(tmp_path)
+    client, Session = _runtime_client()
+    _insert_study_document(
+        Session,
+        document_id="doc-allowed",
+        owner_id="user-1",
+        content="导数描述函数变化率。",
+    )
     headers = _login(client)
 
     response = client.post(
@@ -615,16 +733,33 @@ def test_study_agent_query_persists_sanitized_audit_event(tmp_path: Path):
     assert event.resource_type == "study_agent"
     assert event.resource_id == "req-study-audit"
     assert event.request_id == "req-study-audit"
-    assert event.event_metadata["mode"] == "simple_rag"
-    assert event.event_metadata["target"] == "answer"
+    assert set(event.event_metadata) == {
+        "trace_id",
+        "policy_version",
+        "category",
+        "router_mode",
+        "selected_mode",
+        "policy_status",
+        "needs_review",
+        "fallback_reason",
+        "latency_ms",
+    }
+    assert event.event_metadata["policy_version"] == "rag-policy-v1"
+    assert event.event_metadata["category"] == "definition"
+    assert event.event_metadata["router_mode"] == "simple_rag"
+    assert event.event_metadata["selected_mode"] == "simple_rag"
+    assert event.event_metadata["policy_status"] == "allowed"
     assert event.event_metadata["needs_review"] is False
-    assert event.event_metadata["source_count"] == 1
-    assert event.event_metadata["chunk_count"] == 1
-    assert event.event_metadata["document_count"] == 1
     assert event.event_metadata["trace_id"].startswith("trace-")
-    assert "chunk_source" in event.event_metadata
     assert "fallback_reason" in event.event_metadata
     assert "latency_ms" in event.event_metadata
+    assert "policy" not in event.event_metadata
+    assert "mode" not in event.event_metadata
+    assert "target" not in event.event_metadata
+    assert "source_count" not in event.event_metadata
+    assert "chunk_count" not in event.event_metadata
+    assert "document_count" not in event.event_metadata
+    assert "chunk_source" not in event.event_metadata
     assert "query" not in event.event_metadata
     assert "content" not in event.event_metadata
     assert "sources" not in event.event_metadata
@@ -739,6 +874,38 @@ def test_study_agent_query_uses_default_runtime_when_orchestrator_is_not_injecte
     assert payload["evidence"]["chunks"][0]["metadata"]["owner_id"] == "user-1"
     assert payload["evidence"]["chunks"][0]["metadata"]["document_id"] == "doc-study"
     assert payload["verification"]["needs_review"] is False
+
+
+def test_study_agent_query_returns_runtime_policy_diagnostics():
+    client, Session = _runtime_client()
+    _insert_study_document(
+        Session,
+        document_id="doc-policy",
+        owner_id="user-1",
+        content="Derivatives and integrals are connected by the fundamental theorem.",
+    )
+    headers = _login(client)
+
+    response = client.post(
+        "/api/study-agent/query",
+        json={
+            "query": "Explain the relationship between derivatives and integrals",
+            "target": "answer",
+            "document_ids": ["doc-policy"],
+        },
+        headers={**headers, "x-request-id": "req-study-policy"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "policy" in payload
+    assert payload["policy"]["selected_mode"] in {
+        "simple_rag",
+        "graph_rag_lite",
+        "agentic_rag",
+    }
+    assert "query" not in payload["policy"]
+    assert payload["trace"]["policy"] == payload["policy"]
 
 
 def test_study_agent_default_runtime_requires_document_ids():

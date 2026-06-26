@@ -428,19 +428,23 @@ class StudyAgentOrchestrator:
         evidence = await self.evidence_collector.collect(request, mode=plan.mode)
         draft = self.generator.generate(request, evidence)
         verification = self.verifier.verify(request, evidence, draft)
+        audit_metadata = {
+            "mode": plan.mode.value,
+            "target": request.target.value,
+            "needs_review": verification.needs_review,
+            "source_count": len(evidence.sources),
+            "chunk_count": len(evidence.chunks),
+        }
+        policy_decision = payload.get("policy_decision")
+        if isinstance(policy_decision, dict):
+            audit_metadata["policy"] = policy_decision
         return StudyAgentResult(
             request=request,
             plan=plan,
             evidence=evidence,
             draft=draft,
             verification=verification,
-            audit_metadata={
-                "mode": plan.mode.value,
-                "target": request.target.value,
-                "needs_review": verification.needs_review,
-                "source_count": len(evidence.sources),
-                "chunk_count": len(evidence.chunks),
-            },
+            audit_metadata=audit_metadata,
         )
 
     def _plan(self, request: StudyRequest) -> StudyPlan:

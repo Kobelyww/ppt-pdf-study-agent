@@ -6,6 +6,11 @@ from typing import Any
 
 from src.knowledge.knowledge_graph import KnowledgeGraph
 from src.services.agentic_rag import AgenticRAGPlanner
+from src.services.rag_route_policy import (
+    RAGReadinessSnapshot,
+    RAGRoutePolicyConfig,
+    RAGRoutePolicyService,
+)
 from src.services.rag_router import RAGStrategyRouter
 from src.services.rag_service import RAGService
 from src.services.study_agent import (
@@ -42,6 +47,8 @@ class StudyAgentRuntimeService:
         generator: StudyContentGenerator | None = None,
         verifier: StudyVerifier | None = None,
         router: RAGStrategyRouter | None = None,
+        route_policy: RAGRoutePolicyService | None = None,
+        readiness_provider: Callable[[], RAGReadinessSnapshot | None] | None = None,
         top_k: int = 5,
     ) -> None:
         self.session_factory = session_factory
@@ -56,7 +63,9 @@ class StudyAgentRuntimeService:
         self.agentic_planner = agentic_planner
         self.generator = generator
         self.verifier = verifier
-        self.router = router
+        self.router = router or RAGStrategyRouter()
+        self.route_policy = route_policy or RAGRoutePolicyService(RAGRoutePolicyConfig())
+        self.readiness_provider = readiness_provider or (lambda: None)
         self.top_k = top_k
 
     async def run(self, payload: dict[str, Any]):
@@ -139,6 +148,21 @@ class StudyAgentRuntimeService:
                 detail="Processed document evidence is unavailable.",
             )
 
+        router_decision = self.router.route(request.query, target=request.target.value)
+        policy_decision = self.route_policy.decide(
+            router_decision=router_decision,
+            readiness=self.readiness_provider(),
+            index_statuses=index_statuses,
+            budget=request.budget.value,
+            preferred_mode=request.preferred_mode,
+        )
+        safe_policy = policy_decision.to_safe_dict()
+        orchestrator_payload = {
+            **payload,
+            "preferred_mode": policy_decision.selected_mode.value,
+            "policy_decision": safe_policy,
+        }
+
         rag_service = RAGService()
         rag_service.index_chunks(chunks)
         collector = EvidenceCollector(
@@ -153,10 +177,11 @@ class StudyAgentRuntimeService:
             verifier=self.verifier,
             router=self.router,
         )
-        result = await orchestrator.run(payload)
+        result = await orchestrator.run(orchestrator_payload)
         result.audit_metadata["chunk_source"] = chunk_source
         result.audit_metadata["fallback_reason"] = fallback_reason
         result.audit_metadata["index_statuses"] = index_statuses
+        result.audit_metadata["policy"] = safe_policy
         result.audit_metadata["latency_ms"] = round((perf_counter() - started_at) * 1000, 3)
         return result
 

@@ -12,6 +12,52 @@ from src.db import StudyAgentTraceRecord
 from src.services.study_agent import StudyAgentResult
 
 
+_SAFE_POLICY_KEYS = {
+    "selected_mode",
+    "router_mode",
+    "effective_mode",
+    "category",
+    "status",
+    "reason",
+    "fallback_chain",
+    "readiness_status",
+    "blocked_reason",
+    "estimated_cost",
+    "experiment_enabled",
+    "policy_version",
+}
+_RETRIEVAL_MODES = {"simple_rag", "graph_rag_lite", "agentic_rag"}
+_QUERY_CATEGORIES = {
+    "direct_lookup",
+    "definition",
+    "concept_relation",
+    "learning_path",
+    "multi_document_synthesis",
+    "question_generation",
+    "outline_fragment",
+    "unknown",
+}
+_POLICY_STATUSES = {
+    "allowed",
+    "blocked_by_flag",
+    "blocked_by_category",
+    "blocked_by_readiness",
+    "blocked_by_budget",
+    "blocked_by_index_health",
+}
+_READINESS_STATUSES = {"baseline", "candidate", "hold", "blocked"}
+_ESTIMATED_COSTS = {"low", "medium", "balanced", "high"}
+_POLICY_VERSIONS = {"rag-policy-v1"}
+_POLICY_REASONS = {
+    "simple_rag is always allowed",
+    "advanced routing is disabled",
+    "graph_rag_lite is disabled",
+    "agentic_rag is disabled",
+    "persisted chunks are required for advanced routing",
+    "readiness snapshot is unavailable",
+}
+
+
 class StudyAgentTraceService:
     def __init__(self, session_factory) -> None:
         self.session_factory = session_factory
@@ -24,6 +70,14 @@ class StudyAgentTraceService:
         latency_ms: float,
         index_statuses: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        safe_policy = safe_policy_metadata(result.audit_metadata.get("policy"))
+        trace_metadata: dict[str, Any] = {
+            "expected_term_count": len(result.request.expected_terms),
+            "index_statuses": _safe_index_statuses(index_statuses or {}),
+        }
+        if safe_policy is not None:
+            trace_metadata["policy"] = safe_policy
+
         record = StudyAgentTraceRecord(
             id=f"trace-{uuid4().hex}",
             owner_id=owner_id,
@@ -44,10 +98,7 @@ class StudyAgentTraceService:
             answer_term_recall=result.verification.answer_term_recall,
             needs_review=result.verification.needs_review,
             latency_ms=latency_ms,
-            trace_metadata={
-                "expected_term_count": len(result.request.expected_terms),
-                "index_statuses": _safe_index_statuses(index_statuses or {}),
-            },
+            trace_metadata=trace_metadata,
         )
 
         with self.session_factory() as session:
@@ -88,6 +139,75 @@ def _safe_index_statuses(index_statuses: Mapping[str, Any]) -> dict[str, dict[st
     return safe_statuses
 
 
+def safe_policy_metadata(policy: Any) -> dict[str, Any] | None:
+    if not isinstance(policy, Mapping):
+        return None
+    safe: dict[str, Any] = {}
+    for key in _SAFE_POLICY_KEYS:
+        if key not in policy:
+            continue
+        value = _safe_policy_value(key, policy.get(key))
+        if value is not None:
+            safe[key] = value
+    return safe or None
+
+
+def _safe_policy_value(key: str, value: Any) -> Any:
+    if key in {"selected_mode", "router_mode", "effective_mode"}:
+        return _allowed_string(value, _RETRIEVAL_MODES)
+    if key == "category":
+        return _allowed_string(value, _QUERY_CATEGORIES)
+    if key == "status":
+        return _allowed_string(value, _POLICY_STATUSES)
+    if key in {"reason", "blocked_reason"}:
+        return _safe_policy_reason(value)
+    if key == "fallback_chain":
+        return _safe_fallback_chain(value)
+    if key == "readiness_status":
+        return _allowed_string(value, _READINESS_STATUSES)
+    if key == "estimated_cost":
+        return _allowed_string(value, _ESTIMATED_COSTS)
+    if key == "experiment_enabled":
+        return value if isinstance(value, bool) else None
+    if key == "policy_version":
+        return _allowed_string(value, _POLICY_VERSIONS)
+    return None
+
+
+def _allowed_string(value: Any, allowed: set[str]) -> str | None:
+    if not isinstance(value, str):
+        return None
+    return value if value in allowed else None
+
+
+def _safe_policy_reason(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    if value in _POLICY_REASONS:
+        return value
+    for mode in _RETRIEVAL_MODES:
+        if value == f"{mode} is allowed by route policy":
+            return value
+    for mode in _RETRIEVAL_MODES:
+        for category in _QUERY_CATEGORIES:
+            if value == f"{mode} is not candidate for {category}":
+                return value
+    for budget in _ESTIMATED_COSTS:
+        if value == f"agentic_rag requires {budget} budget":
+            return value
+    for category in _QUERY_CATEGORIES:
+        if value == f"{category} is not enabled":
+            return value
+    return None
+
+
+def _safe_fallback_chain(value: Any) -> list[str] | None:
+    if not isinstance(value, list):
+        return None
+    modes = [item for item in value if isinstance(item, str) and item in _RETRIEVAL_MODES]
+    return modes or None
+
+
 def _safe_int(value: Any) -> int:
     try:
         return int(value or 0)
@@ -117,4 +237,7 @@ def _trace_payload(
     }
     if include_hash:
         payload["query_hash"] = record.query_hash
+    policy = safe_policy_metadata((record.trace_metadata or {}).get("policy"))
+    if policy is not None:
+        payload["policy"] = policy
     return payload

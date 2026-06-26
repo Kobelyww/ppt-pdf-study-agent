@@ -185,6 +185,39 @@ async def test_runtime_fallback_to_artifact_chunking_is_observable():
 
 
 @pytest.mark.asyncio
+async def test_runtime_applies_route_policy_and_keeps_policy_safe():
+    Session = _session_factory()
+    _insert_ready_document_with_artifact(
+        Session,
+        content="Derivatives and integrals are connected by the fundamental theorem.",
+    )
+    runtime = StudyAgentRuntimeService(
+        session_factory=Session,
+        chunker=StudyDocumentChunker(max_chars=200, overlap_chars=20),
+    )
+
+    result = await runtime.run(
+        {
+            "query": "导数和积分的关系是什么？",
+            "target": "answer",
+            "document_ids": ["doc-study"],
+            "authenticated_user_id": "user-1",
+            "request_id": "req-runtime-policy",
+        }
+    )
+
+    assert result.plan.mode == RetrievalMode.SIMPLE
+    policy = result.audit_metadata["policy"]
+    assert policy["status"] == "blocked_by_flag"
+    assert policy["router_mode"] == "graph_rag_lite"
+    assert policy["selected_mode"] == "simple_rag"
+    serialized_policy = str(policy).lower()
+    assert "导数" not in serialized_policy
+    assert "积分" not in serialized_policy
+    assert "关系" not in serialized_policy
+
+
+@pytest.mark.asyncio
 async def test_runtime_falls_back_when_persisted_chunk_set_is_incomplete():
     Session = _session_factory()
     _insert_ready_document_with_artifact(
