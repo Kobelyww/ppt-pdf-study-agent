@@ -17,7 +17,7 @@
 
 下一阶段实现计划：构建确定性、可追踪的 study-agent 工作流，在 simple RAG、Graph RAG Lite 和 Agentic RAG 之间自动路由学习查询；收集 evidence；生成带引用的复习内容；并验证结果应直接返回还是标记为人工审核。
 
-Study Agent queries now require explicit `document_ids` and use the authenticated user's processed `normalized_document` artifacts as evidence. The first production path builds a temporary in-memory index per request; persistent chunk/vector indexing remains a future scaling step.
+Study Agent queries now require explicit `document_ids` and prefer persisted chunks created from the authenticated user's processed `normalized_document` artifacts. Query-time chunking remains as an observable fallback when chunks are missing, incomplete, or stale; vector provider integration remains a future scaling step.
 
 The frontend workbench includes a Study Agent panel for one or more ready documents, grounded answer/question/note generation, citation display, confidence, and review status.
 
