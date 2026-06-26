@@ -19,6 +19,8 @@
 
 Study Agent queries now require explicit `document_ids` and prefer persisted chunks created from the authenticated user's processed `normalized_document` artifacts. Query-time chunking remains as an observable fallback when chunks are missing, incomplete, or stale; vector provider integration remains a future scaling step.
 
+Study Agent queries also create safe trace summaries for product observability. Trace metadata records route, index fallback, confidence, recall, latency, and review status without storing raw private query text, generated answers, chunk content, or source snippets.
+
 The frontend workbench includes a Study Agent panel for one or more ready documents, grounded answer/question/note generation, citation display, confidence, and review status.
 
 ### MVP-8 Production Readiness Foundation
