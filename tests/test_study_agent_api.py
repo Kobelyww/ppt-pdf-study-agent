@@ -8,8 +8,16 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from src.api.app import create_app
-from src.db.models import AuditEventRecord, Base, Document, DocumentArtifactRecord, UserRecord
+from src.db.models import (
+    AuditEventRecord,
+    Base,
+    Document,
+    DocumentArtifactRecord,
+    DocumentChunkRecord,
+    UserRecord,
+)
 from src.security.auth import hash_password
+from src.services.document_service import DocumentService
 from src.services.rag_router import RetrievalMode
 from src.services.rag_service import Chunk
 from src.services.study_agent import (
@@ -21,6 +29,7 @@ from src.services.study_agent import (
     StudyTarget,
     StudyVerification,
 )
+from src.storage.backend import LocalStorageBackend
 
 
 @dataclass
@@ -102,7 +111,12 @@ def _session_factory():
 def _client(tmp_path: Path):
     Session = _session_factory()
     orchestrator = FakeStudyAgentOrchestrator(payloads=[])
+    document_service = DocumentService(
+        session_factory=Session,
+        storage=LocalStorageBackend(tmp_path / "storage"),
+    )
     app = create_app(
+        document_service=document_service,
         session_factory=Session,
         secret_key="test-secret",
         allow_dev_user_header=False,
@@ -118,6 +132,175 @@ def _login(client: TestClient) -> dict[str, str]:
     )
     assert response.status_code == 200
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+
+def _insert_ready_document_for_api(
+    Session, *, document_id: str = "doc-api", owner_id: str = "user-1"
+) -> None:
+    now = datetime.now(timezone.utc)
+    with Session() as session:
+        session.add(
+            Document(
+                id=document_id,
+                owner_id=owner_id,
+                title="API Notes",
+                source_type="pdf",
+                storage_uri=f"local://uploads/{document_id}.pdf",
+                content_hash=f"hash-{document_id}",
+                original_filename=f"{document_id}.pdf",
+                status="ready",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        session.add(
+            DocumentArtifactRecord(
+                id=f"artifact-{document_id}",
+                document_id=document_id,
+                artifact_type="normalized_document",
+                content="Derivatives measure instantaneous rate of change.",
+                artifact_metadata={"source": "api-test"},
+                created_at=now,
+            )
+        )
+        session.commit()
+
+
+def test_document_payload_includes_compact_study_index_status(tmp_path: Path):
+    client, _orchestrator, Session = _client(tmp_path)
+    headers = _login(client)
+    _insert_ready_document_for_api(Session)
+
+    response = client.get("/api/documents", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload[0]["study_index"] == {
+        "document_id": "doc-api",
+        "status": "fallback_available",
+        "artifact_id": "artifact-doc-api",
+        "chunk_count": 0,
+        "indexed_at": None,
+        "fallback_reason": "persisted_chunks_missing",
+    }
+
+
+def test_reindex_endpoint_indexes_owned_ready_document(tmp_path: Path):
+    client, _orchestrator, Session = _client(tmp_path)
+    headers = _login(client)
+    _insert_ready_document_for_api(Session)
+
+    response = client.post("/api/documents/doc-api/study-index/reindex", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["document_id"] == "doc-api"
+    assert payload["status"] == "indexed"
+    assert payload["artifact_id"] == "artifact-doc-api"
+    assert payload["chunk_count"] == 1
+    assert payload["fallback_reason"] is None
+    with Session() as session:
+        chunks = session.query(DocumentChunkRecord).all()
+    assert len(chunks) == 1
+    assert chunks[0].owner_id == "user-1"
+
+
+def test_reindex_endpoint_returns_404_for_cross_owner_document(tmp_path: Path):
+    client, _orchestrator, Session = _client(tmp_path)
+    headers = _login(client)
+    _insert_ready_document_for_api(Session, document_id="doc-private", owner_id="user-2")
+
+    response = client.post("/api/documents/doc-private/study-index/reindex", headers=headers)
+
+    assert response.status_code == 404
+
+
+def test_reindex_endpoint_rejects_processing_document(tmp_path: Path):
+    client, _orchestrator, Session = _client(tmp_path)
+    headers = _login(client)
+    _insert_ready_document_for_api(
+        Session, document_id="doc-processing", owner_id="user-1"
+    )
+    with Session() as session:
+        document = session.get(Document, "doc-processing")
+        document.status = "processing"
+        session.commit()
+
+    response = client.post("/api/documents/doc-processing/study-index/reindex", headers=headers)
+
+    assert response.status_code == 422
+
+
+def test_reindex_endpoint_returns_422_when_normalized_artifact_missing(tmp_path: Path):
+    client, _orchestrator, Session = _client(tmp_path)
+    headers = _login(client)
+    _insert_study_document(
+        Session, document_id="doc-missing-artifact", owner_id="user-1", content=None
+    )
+
+    response = client.post(
+        "/api/documents/doc-missing-artifact/study-index/reindex",
+        headers=headers,
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Processed document evidence is unavailable."
+
+
+def test_reindex_endpoint_returns_503_without_index_service(tmp_path: Path):
+    app = create_app(
+        secret_key="test-secret",
+        allow_dev_user_header=True,
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/documents/doc-api/study-index/reindex",
+        headers={"x-user-id": "user-1"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Study document index is not configured"
+
+
+def test_reindex_endpoint_persists_sanitized_audit_metadata(tmp_path: Path):
+    client, _orchestrator, Session = _client(tmp_path)
+    headers = _login(client)
+    _insert_ready_document_for_api(Session)
+
+    response = client.post(
+        "/api/documents/doc-api/study-index/reindex",
+        headers={**headers, "x-request-id": "req-reindex-audit"},
+    )
+
+    assert response.status_code == 200
+    with Session() as session:
+        event = (
+            session.query(AuditEventRecord)
+            .filter(AuditEventRecord.action == "document.study_index.reindexed")
+            .one()
+        )
+
+    assert event.actor_id == "user-1"
+    assert event.resource_type == "document"
+    assert event.resource_id == "doc-api"
+    assert event.request_id == "req-reindex-audit"
+    assert set(event.event_metadata) == {
+        "document_id",
+        "artifact_id",
+        "chunk_count",
+        "index_status",
+        "fallback_used",
+    }
+    assert event.event_metadata == {
+        "document_id": "doc-api",
+        "artifact_id": "artifact-doc-api",
+        "chunk_count": 1,
+        "index_status": "indexed",
+        "fallback_used": False,
+    }
+    forbidden = {"content", "query", "sources", "chunks", "token", "password"}
+    assert forbidden.isdisjoint(event.event_metadata)
 
 
 def test_study_agent_query_requires_authentication(tmp_path: Path):

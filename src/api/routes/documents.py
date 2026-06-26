@@ -10,6 +10,8 @@ from pydantic import BaseModel, Field
 from src.api.request_context import get_user_context
 from src.db.models import ContentVersionRecord
 from src.security.audit import record_audit_event
+from src.services.study_agent_documents import StudyAgentDocumentError
+from src.services.study_agent_index import StudyDocumentIndexService
 from src.workers.tasks import metadata_document_task
 
 
@@ -48,8 +50,10 @@ class DocumentCreateResponse(BaseModel):
 router = APIRouter(tags=["documents"])
 
 
-def _document_payload(document) -> dict[str, Any]:
-    return {
+def _document_payload(
+    document, study_index: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    payload = {
         "id": document.id,
         "owner_id": document.owner_id,
         "title": document.title,
@@ -61,6 +65,9 @@ def _document_payload(document) -> dict[str, Any]:
         "created_at": _format_datetime(document.created_at),
         "updated_at": _format_datetime(document.updated_at),
     }
+    if study_index is not None:
+        payload["study_index"] = study_index
+    return payload
 
 
 def _job_payload(job) -> dict[str, Any]:
@@ -240,6 +247,28 @@ def _record_api_audit(
         )
 
 
+def _study_index_service(request: Request) -> StudyDocumentIndexService | None:
+    session_factory = getattr(request.app.state, "session_factory", None)
+    if session_factory is None:
+        document_service = getattr(request.app.state, "document_service", None)
+        session_factory = getattr(document_service, "session_factory", None)
+    if session_factory is None:
+        return None
+    return StudyDocumentIndexService(session_factory=session_factory)
+
+
+def _study_index_payload(
+    request: Request, *, owner_id: str, document_id: str
+) -> dict[str, Any] | None:
+    service = _study_index_service(request)
+    if service is None:
+        return None
+    try:
+        return service.status(owner_id=owner_id, document_id=document_id).to_dict()
+    except StudyAgentDocumentError:
+        return None
+
+
 @router.get("/documents")
 def list_documents(request: Request) -> list[dict[str, Any]]:
     document_service = request.app.state.document_service
@@ -247,7 +276,12 @@ def list_documents(request: Request) -> list[dict[str, Any]]:
         return []
     context = get_user_context(request)
     return [
-        _document_payload(document)
+        _document_payload(
+            document,
+            study_index=_study_index_payload(
+                request, owner_id=context.user_id, document_id=document.id
+            ),
+        )
         for document in document_service.list_documents(owner_id=context.user_id)
     ]
 
@@ -265,7 +299,46 @@ def get_document(request: Request, document_id: str) -> dict[str, Any]:
         ):
             raise HTTPException(status_code=403, detail="Forbidden")
         raise HTTPException(status_code=404, detail="Document not found")
-    return _document_payload(document)
+    return _document_payload(
+        document,
+        study_index=_study_index_payload(
+            request, owner_id=context.user_id, document_id=document.id
+        ),
+    )
+
+
+@router.post("/documents/{document_id}/study-index/reindex")
+def reindex_document_study_index(request: Request, document_id: str) -> dict[str, Any]:
+    context = get_user_context(request)
+    service = _study_index_service(request)
+    if service is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Study document index is not configured",
+        )
+    try:
+        status_payload = service.index_document(
+            owner_id=context.user_id,
+            document_id=document_id,
+        ).to_dict()
+    except StudyAgentDocumentError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    _record_api_audit(
+        request,
+        actor_id=context.user_id,
+        request_id=context.request_id,
+        action="document.study_index.reindexed",
+        resource_type="document",
+        resource_id=document_id,
+        metadata={
+            "document_id": status_payload["document_id"],
+            "artifact_id": status_payload["artifact_id"],
+            "chunk_count": status_payload["chunk_count"],
+            "index_status": status_payload["status"],
+            "fallback_used": status_payload["fallback_reason"] is not None,
+        },
+    )
+    return status_payload
 
 
 @router.get("/documents/{document_id}/versions")

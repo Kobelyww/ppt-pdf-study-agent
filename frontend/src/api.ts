@@ -7,6 +7,15 @@ export type JobStatus =
   | "cancelled"
   | "canceled";
 
+export interface StudyIndexStatus {
+  document_id: string;
+  status: "indexed" | "missing" | "stale" | "fallback_available";
+  artifact_id?: string | null;
+  chunk_count: number;
+  indexed_at?: string | null;
+  fallback_reason?: string | null;
+}
+
 export interface ApiDocument {
   id: string;
   owner_id: string;
@@ -18,6 +27,7 @@ export interface ApiDocument {
   status: string;
   created_at?: string | null;
   updated_at?: string | null;
+  study_index?: StudyIndexStatus | null;
 }
 
 export interface ApiJob {
