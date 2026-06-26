@@ -97,7 +97,30 @@ def test_alembic_upgrade_creates_orm_compatible_sqlite_schema(tmp_path, monkeypa
     assert {"document_id", "metadata"}.issubset(content_version_columns)
     assert {"document_id", "metadata"}.issubset(artifact_columns)
     assert {"actor_id", "metadata"}.issubset(audit_event_columns)
-    assert "embedding" in chunk_columns
+    assert {
+        "id",
+        "owner_id",
+        "document_id",
+        "artifact_id",
+        "chunk_index",
+        "chunk_count",
+        "source",
+        "content",
+        "metadata",
+        "content_hash",
+        "created_at",
+        "updated_at",
+        "section_id",
+        "page_number",
+        "embedding",
+    }.issubset(chunk_columns)
+    chunk_indexes = {index["name"] for index in inspector.get_indexes("document_chunks")}
+    assert "ix_document_chunks_owner_document" in chunk_indexes
+    assert "ix_document_chunks_document_artifact" in chunk_indexes
+    chunk_unique_constraints = {
+        constraint["name"] for constraint in inspector.get_unique_constraints("document_chunks")
+    }
+    assert "uq_document_chunks_artifact_index" in chunk_unique_constraints
     assert any(
         fk["referred_table"] == "knowledge_points" and fk["options"].get("ondelete") == "SET NULL"
         for fk in question_fks
@@ -150,6 +173,128 @@ def test_alembic_upgrade_creates_orm_compatible_sqlite_schema(tmp_path, monkeypa
 
     inspector = inspect(engine)
     assert "documents" not in inspector.get_table_names()
+
+
+def test_alembic_upgrade_reconciles_existing_document_chunks_table(tmp_path, monkeypatch):
+    database_path = tmp_path / "legacy_chunks.db"
+    database_url = f"sqlite:///{database_path}"
+    monkeypatch.setenv("STUDY_AGENT_DATABASE_URL", database_url)
+    legacy_document_id = "d" * 64
+
+    _run_alembic("upgrade", "0002")
+
+    engine = create_engine(database_url)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO documents (
+                    id, owner_id, title, source_type, storage_uri, content_hash,
+                    status, created_at, updated_at
+                )
+                VALUES (
+                    :document_id, 'legacy-owner', 'Legacy Notes', 'pdf',
+                    'local://legacy.pdf', 'sha256:legacy', 'uploaded',
+                    CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                )
+                """
+            ),
+            {"document_id": legacy_document_id},
+        )
+        connection.execute(text("DROP TABLE document_chunks"))
+        connection.execute(
+            text(
+                """
+                CREATE TABLE document_chunks (
+                    id VARCHAR(64) PRIMARY KEY,
+                    document_id VARCHAR(64) NOT NULL,
+                    content TEXT NOT NULL,
+                    chunk_index INTEGER NOT NULL,
+                    embedding vector(768)
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO document_chunks (id, document_id, content, chunk_index)
+                VALUES ('chunk-legacy-1', :document_id, 'legacy content', 0)
+                """
+            ),
+            {"document_id": legacy_document_id},
+        )
+
+    _run_alembic("upgrade", "0003")
+
+    inspector = inspect(engine)
+    chunk_columns = {column["name"]: column for column in inspector.get_columns("document_chunks")}
+    assert {
+        "id",
+        "owner_id",
+        "document_id",
+        "artifact_id",
+        "chunk_index",
+        "chunk_count",
+        "source",
+        "content",
+        "metadata",
+        "content_hash",
+        "created_at",
+        "updated_at",
+        "section_id",
+        "page_number",
+        "embedding",
+    }.issubset(chunk_columns)
+
+    chunk_indexes = {index["name"] for index in inspector.get_indexes("document_chunks")}
+    assert "ix_document_chunks_owner_document" in chunk_indexes
+    assert "ix_document_chunks_document_artifact" in chunk_indexes
+
+    chunk_unique_constraints = {
+        constraint["name"] for constraint in inspector.get_unique_constraints("document_chunks")
+    }
+    assert "uq_document_chunks_artifact_index" in chunk_unique_constraints
+    chunk_foreign_keys = inspector.get_foreign_keys("document_chunks")
+    assert any(
+        fk["referred_table"] == "document_artifacts"
+        and fk["constrained_columns"] == ["artifact_id"]
+        for fk in chunk_foreign_keys
+    )
+
+    with engine.connect() as connection:
+        legacy_row = (
+            connection.execute(
+                text(
+                    """
+                    SELECT owner_id, artifact_id, chunk_count, source, metadata,
+                           content_hash, created_at, updated_at, section_id, page_number
+                    FROM document_chunks
+                    WHERE id = 'chunk-legacy-1'
+                    """
+                )
+            )
+            .mappings()
+            .one()
+        )
+        embedding_column = (
+            connection.execute(text("PRAGMA table_info(document_chunks)")).mappings().all()
+        )
+
+    assert legacy_row["owner_id"] == "legacy-owner"
+    assert len(legacy_row["artifact_id"]) <= 64
+    assert legacy_row["artifact_id"].startswith("legacy-artifact:")
+    assert legacy_row["chunk_count"] == 1
+    assert legacy_row["source"] == f"document:{legacy_document_id}:chunk:0"
+    assert legacy_row["metadata"] == "{}"
+    assert legacy_row["content_hash"] == "legacy:chunk-legacy-1"
+    assert legacy_row["created_at"] is not None
+    assert legacy_row["updated_at"] is not None
+    assert legacy_row["section_id"] is None
+    assert legacy_row["page_number"] is None
+    assert next(row for row in embedding_column if row["name"] == "embedding")[
+        "type"
+    ].lower() == "vector(768)"
 
 
 def test_database_url_fallback_is_used_when_study_agent_url_is_absent(tmp_path, monkeypatch):

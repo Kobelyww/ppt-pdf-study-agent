@@ -18,6 +18,7 @@ from src.db import (
     ReviewTaskRecord,
     ContentVersionRecord,
     create_session_factory,
+    DocumentChunkRecord,
 )
 
 
@@ -179,6 +180,27 @@ def test_mvp7_product_records_create_and_preserve_metadata_columns(tmp_path):
             content="normalized",
             artifact_metadata={"source": "test"},
         )
+        chunk = DocumentChunkRecord(
+            id="chunk-1",
+            document=document,
+            owner_id="user-1",
+            artifact_id="artifact-1",
+            chunk_index=0,
+            chunk_count=1,
+            source="document:doc-1:chunk:0",
+            content="normalized",
+            chunk_metadata={
+                "owner_id": "user-1",
+                "document_id": "doc-1",
+                "document_title": "Lecture Notes",
+                "artifact_id": "artifact-1",
+                "artifact_type": "normalized_document",
+                "chunk_index": 0,
+                "chunk_count": 1,
+                "source_kind": "persisted_document_chunk",
+            },
+            content_hash="hash-normalized",
+        )
         version = ContentVersionRecord(
             id="outline:doc-1:v1",
             document_id="doc-1",
@@ -224,14 +246,22 @@ def test_mvp7_product_records_create_and_preserve_metadata_columns(tmp_path):
             request_id="req-1",
             event_metadata={"filename": "Lecture Notes.pdf"},
         )
-        session.add_all([document, artifact, version, export, feedback, review, audit])
+        session.add_all([document, artifact, chunk, version, export, feedback, review, audit])
         session.commit()
 
     with Session(engine) as session:
         version = session.get(ContentVersionRecord, "outline:doc-1:v1")
         artifact = session.get(DocumentArtifactRecord, "artifact-1")
+        chunk = session.get(DocumentChunkRecord, "chunk-1")
         audit = session.get(AuditEventRecord, "audit-1")
 
         assert version.content_metadata == {"generator": "test"}
         assert artifact.artifact_metadata == {"source": "test"}
+        assert chunk is not None
+        assert chunk.owner_id == "user-1"
+        assert chunk.artifact_id == "artifact-1"
+        assert chunk.chunk_metadata["source_kind"] == "persisted_document_chunk"
+        assert chunk.document.title == "Lecture Notes"
+        assert chunk.created_at is not None
+        assert chunk.updated_at is not None
         assert audit.event_metadata == {"filename": "Lecture Notes.pdf"}

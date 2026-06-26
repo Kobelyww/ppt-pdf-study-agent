@@ -6,6 +6,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     JSON,
     String,
@@ -76,6 +77,9 @@ class Document(Base):
         back_populates="document", cascade="all, delete-orphan"
     )
     artifacts: Mapped[List["DocumentArtifactRecord"]] = relationship(
+        back_populates="document", cascade="all, delete-orphan"
+    )
+    chunks: Mapped[List["DocumentChunkRecord"]] = relationship(
         back_populates="document", cascade="all, delete-orphan"
     )
     export_jobs: Mapped[List["ExportJobRecord"]] = relationship(
@@ -175,6 +179,45 @@ class DocumentArtifactRecord(Base):
     )
 
     document: Mapped[Document] = relationship(back_populates="artifacts")
+    chunks: Mapped[List["DocumentChunkRecord"]] = relationship(back_populates="artifact")
+
+
+class DocumentChunkRecord(Base):
+    __tablename__ = "document_chunks"
+    __table_args__ = (
+        UniqueConstraint("artifact_id", "chunk_index", name="uq_document_chunks_artifact_index"),
+        Index("ix_document_chunks_owner_document", "owner_id", "document_id"),
+        Index("ix_document_chunks_document_artifact", "document_id", "artifact_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    document_id: Mapped[str] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    artifact_id: Mapped[str] = mapped_column(
+        ForeignKey("document_artifacts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    chunk_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    source: Mapped[str] = mapped_column(String(512), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    chunk_metadata: Mapped[dict] = mapped_column("metadata", JSON, nullable=False, default=dict)
+    content_hash: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    section_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("parsed_sections.id", ondelete="SET NULL"), nullable=True
+    )
+    page_number: Mapped[Optional[int]] = mapped_column(Integer)
+    embedding: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+    document: Mapped[Document] = relationship(back_populates="chunks")
+    artifact: Mapped[DocumentArtifactRecord] = relationship(back_populates="chunks")
 
 
 class ContentVersionRecord(Base):
