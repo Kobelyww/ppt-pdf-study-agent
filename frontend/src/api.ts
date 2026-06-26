@@ -11,6 +11,9 @@ export interface StudyIndexStatus {
   document_id: string;
   status: "indexed" | "missing" | "stale" | "fallback_available";
   artifact_id?: string | null;
+  expected_chunk_count?: number | null;
+  indexed_artifact_id?: string | null;
+  latest_artifact_id?: string | null;
   chunk_count: number;
   indexed_at?: string | null;
   fallback_reason?: string | null;
@@ -109,6 +112,23 @@ export interface StudyAgentChunk {
   score: number;
 }
 
+export interface StudyAgentTraceSummary {
+  trace_id: string;
+  request_id?: string | null;
+  selected_mode?: StudyRetrievalMode | null;
+  route_reason?: string | null;
+  chunk_source?: "persisted" | "fallback" | null;
+  fallback_reason?: string | null;
+  document_count: number;
+  source_count: number;
+  used_chunk_count: number;
+  confidence: number;
+  source_recall: number;
+  answer_term_recall: number;
+  needs_review: boolean;
+  latency_ms: number;
+}
+
 export interface StudyAgentResult {
   request: {
     query: string;
@@ -151,6 +171,7 @@ export interface StudyAgentResult {
     source_recall: number;
     answer_term_recall: number;
   };
+  trace?: StudyAgentTraceSummary;
   audit_metadata: Record<string, unknown>;
 }
 

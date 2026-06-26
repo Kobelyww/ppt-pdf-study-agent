@@ -767,6 +767,40 @@ dd {
   border-top: 1px solid #edf1f6;
 }
 
+.trace-diagnostics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.trace-diagnostics span {
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid #d8dee8;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #465366;
+  font-size: 0.86rem;
+  overflow-wrap: anywhere;
+}
+
+.trace-diagnostics strong {
+  display: block;
+  color: #18212f;
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.warning-banner {
+  padding: 10px 12px;
+  border: 1px solid #f5c451;
+  border-radius: 6px;
+  background: #fff8e6;
+  color: #6f4e00;
+}
+
 .agent-answer {
   padding: 12px;
   border: 1px solid #e1e7ef;

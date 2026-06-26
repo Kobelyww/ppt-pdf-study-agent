@@ -313,6 +313,34 @@ function StudyAgentPanel({
               {result.verification.needs_review ? "Needs review" : "Passed"}
             </span>
           </div>
+          {result.trace ? (
+            <div className="trace-diagnostics" aria-label="Study Agent diagnostics">
+              <span>
+                <strong>Trace</strong> {result.trace.trace_id}
+              </span>
+              <span>
+                <strong>Mode</strong> {result.trace.selected_mode ?? result.plan.mode}
+              </span>
+              <span>
+                <strong>Evidence</strong> {result.trace.chunk_source ?? "unknown"}
+              </span>
+              <span>
+                <strong>Confidence</strong> {Math.round(result.trace.confidence * 100)}%
+              </span>
+              <span>
+                <strong>Recall</strong>{" "}
+                {Math.round(result.trace.answer_term_recall * 100)}%
+              </span>
+              <span>
+                <strong>Latency</strong> {Math.round(result.trace.latency_ms)}ms
+              </span>
+            </div>
+          ) : null}
+          {result.trace?.fallback_reason ? (
+            <div className="warning-banner compact" role="status">
+              Evidence index fallback: {result.trace.fallback_reason}
+            </div>
+          ) : null}
           <pre className="content-block agent-answer">{result.draft.content}</pre>
           <EvidenceViewer result={result} />
         </div>
