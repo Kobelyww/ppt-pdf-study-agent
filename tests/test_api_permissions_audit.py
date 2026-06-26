@@ -6,7 +6,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from src.api.app import create_app
-from src.db.models import AuditEventRecord, Base
+from src.db.models import AuditEventRecord, Base, FeedbackRecord, ReviewTaskRecord
 from src.services.document_service import DocumentService
 from src.storage.backend import LocalStorageBackend
 
@@ -94,6 +94,41 @@ def test_feedback_uses_header_user_and_records_audit(tmp_path: Path):
     assert event.resource_id == response.json()["id"]
     assert event.request_id == "req-feedback"
     assert event.event_metadata["target_id"] == "q-1"
+
+
+def test_feedback_can_target_study_agent_trace_without_copying_private_content(
+    tmp_path: Path,
+):
+    client, _service, Session = _client(tmp_path)
+    headers = {"x-user-id": "user-1", "x-request-id": "req-feedback-trace"}
+
+    response = client.post(
+        "/api/feedback",
+        json={
+            "target_type": "study_agent_trace",
+            "target_id": "trace-1",
+            "rating": 1,
+            "reason": "incorrect",
+            "comment": "The answer missed the key term.",
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    with Session() as session:
+        feedback = session.query(FeedbackRecord).filter_by(target_id="trace-1").one()
+        review = session.query(ReviewTaskRecord).filter_by(target_id="trace-1").one()
+        event = session.query(AuditEventRecord).filter_by(action="feedback.created").one()
+
+    assert feedback.target_type == "study_agent_trace"
+    assert review.target_type == "study_agent_trace"
+    assert event.event_metadata == {
+        "target_type": "study_agent_trace",
+        "target_id": "trace-1",
+        "rating": 1,
+        "reason": "incorrect",
+    }
+    assert "comment" not in event.event_metadata
 
 
 def test_review_decision_is_owner_scoped_and_records_audit(tmp_path: Path):

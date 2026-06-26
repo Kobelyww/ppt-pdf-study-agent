@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from src.api.request_context import authenticate_request
+from src.api.routes.admin import router as admin_router
 from src.api.routes.audit import router as audit_router
 from src.api.routes.auth import router as auth_router
 from src.api.routes.documents import router as documents_router
@@ -199,6 +200,7 @@ def create_app(
         return await call_next(request)
 
     app.include_router(auth_router)
+    app.include_router(admin_router)
     app.include_router(audit_router)
     app.include_router(documents_router, prefix="/api")
     app.include_router(exports_router)

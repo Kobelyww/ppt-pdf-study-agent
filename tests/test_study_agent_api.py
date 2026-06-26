@@ -134,6 +134,26 @@ def _login(client: TestClient) -> dict[str, str]:
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
+def _login_admin(client: TestClient, Session) -> dict[str, str]:
+    with Session() as session:
+        session.add(
+            UserRecord(
+                id="admin-1",
+                email="admin@example.com",
+                password_hash=hash_password("password-123"),
+                role="admin",
+                is_active=True,
+            )
+        )
+        session.commit()
+    response = client.post(
+        "/api/auth/login",
+        json={"email": "admin@example.com", "password": "password-123"},
+    )
+    assert response.status_code == 200
+    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+
 def _insert_ready_document_for_api(
     Session, *, document_id: str = "doc-api", owner_id: str = "user-1"
 ) -> None:
@@ -343,6 +363,72 @@ def test_study_agent_query_returns_trace_payload(tmp_path: Path):
             "request_id": "req-study-1",
         }
     ]
+
+
+def test_trace_detail_api_returns_owner_scoped_safe_trace(tmp_path: Path):
+    client, _orchestrator, _Session = _client(tmp_path)
+    headers = _login(client)
+    response = client.post(
+        "/api/study-agent/query",
+        json={"query": "什么是导数？", "target": "answer"},
+        headers={**headers, "x-request-id": "req-trace-detail"},
+    )
+    trace_id = response.json()["trace"]["trace_id"]
+
+    detail = client.get(f"/api/study-agent/traces/{trace_id}", headers=headers)
+
+    assert detail.status_code == 200
+    payload = detail.json()
+    assert payload["trace_id"] == trace_id
+    assert payload["query_hash"].startswith("sha256:")
+    serialized = str(payload)
+    assert "什么是导数" not in serialized
+    assert "导数描述" not in serialized
+
+
+def test_index_summary_api_returns_owner_scoped_counts(tmp_path: Path):
+    client, _orchestrator, _Session = _client(tmp_path)
+    headers = _login(client)
+
+    response = client.get("/api/study-agent/index-summary", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["owner_id"] == "user-1"
+    assert "status_counts" in payload
+    assert "fallback_reason_counts" in payload
+
+
+def test_admin_rag_evaluation_api_requires_admin_role(tmp_path: Path):
+    client, _orchestrator, _Session = _client(tmp_path)
+    headers = _login(client)
+
+    response = client.post(
+        "/api/admin/rag-evaluations",
+        json={"modes": ["simple_rag"]},
+        headers=headers,
+    )
+
+    assert response.status_code == 403
+
+
+def test_admin_rag_evaluation_api_creates_run(tmp_path: Path):
+    client, _orchestrator, Session = _client(tmp_path)
+    headers = _login_admin(client, Session)
+
+    response = client.post(
+        "/api/admin/rag-evaluations",
+        json={"modes": ["simple_rag"], "report_dir": str(tmp_path / "reports")},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["id"].startswith("eval-run-")
+    assert payload["modes"] == ["simple_rag"]
+    assert payload["case_count"] == 4
+    assert "summary" in payload
+    assert "readiness" in payload
 
 
 def test_study_agent_query_returns_compact_unpersisted_trace_without_session_factory():
