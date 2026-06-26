@@ -345,6 +345,72 @@ def test_study_agent_query_returns_trace_payload(tmp_path: Path):
     ]
 
 
+def test_study_agent_query_returns_compact_unpersisted_trace_without_session_factory():
+    orchestrator = FakeStudyAgentOrchestrator(payloads=[])
+    app = create_app(
+        secret_key="test-secret",
+        allow_dev_user_header=True,
+        study_agent_orchestrator=orchestrator,
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/study-agent/query",
+        json={"query": "什么是导数？"},
+        headers={"x-user-id": "user-1", "x-request-id": "req-study-unpersisted"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert {"request", "plan", "evidence", "draft", "verification"}.issubset(payload)
+    trace = payload["trace"]
+    assert trace["trace_id"] == "trace-unpersisted"
+    assert trace["request_id"] == "req-study-unpersisted"
+    assert trace["selected_mode"] == "simple_rag"
+    assert trace["route_reason"] == "definition or direct lookup query"
+    assert trace["chunk_source"] is None
+    assert trace["fallback_reason"] is None
+    assert trace["document_count"] == 0
+    assert trace["source_count"] == 1
+    assert trace["used_chunk_count"] == 1
+    assert trace["confidence"] == 0.8
+    assert trace["source_recall"] == 1.0
+    assert trace["answer_term_recall"] == 1.0
+    assert trace["needs_review"] is False
+    assert trace["latency_ms"] >= 0
+    assert set(trace) == {
+        "trace_id",
+        "request_id",
+        "selected_mode",
+        "route_reason",
+        "chunk_source",
+        "fallback_reason",
+        "document_count",
+        "source_count",
+        "used_chunk_count",
+        "confidence",
+        "source_recall",
+        "answer_term_recall",
+        "needs_review",
+        "latency_ms",
+    }
+    assert {
+        "query_hash",
+        "target",
+        "document_ids",
+        "estimated_cost",
+        "fallback_chain",
+        "created_at",
+    }.isdisjoint(trace)
+    assert orchestrator.payloads == [
+        {
+            "query": "什么是导数？",
+            "authenticated_user_id": "user-1",
+            "request_id": "req-study-unpersisted",
+        }
+    ]
+
+
 def test_study_agent_query_uses_authenticated_user_context(tmp_path: Path):
     client, orchestrator, _Session = _client(tmp_path)
     headers = _login(client)
