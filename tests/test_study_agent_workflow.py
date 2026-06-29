@@ -208,6 +208,23 @@ def test_summarize_workflow_status_allows_graph_seed_fallback_reason():
     assert payload["status"] == "completed_with_fallback"
 
 
+def test_summarize_workflow_status_prefers_partial_over_earlier_fallback():
+    retrieve = WorkflowStageResult(
+        stage_name=WorkflowStageName.RETRIEVE,
+        status=WorkflowStageStatus.PASSED,
+        input_summary={},
+        output_summary={"fallback_reason": "persisted_chunks_missing"},
+    )
+    trace = WorkflowStageResult(
+        stage_name=WorkflowStageName.TRACE,
+        status=WorkflowStageStatus.RUNNING,
+        input_summary={},
+        output_summary={},
+    )
+
+    assert summarize_workflow_status([retrieve, trace]) == WorkflowStatus.PARTIAL
+
+
 def test_summarize_workflow_status_marks_incomplete_stage_states_partial():
     for status in (
         WorkflowStageStatus.PENDING,

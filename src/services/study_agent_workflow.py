@@ -242,12 +242,6 @@ def summarize_workflow_status(stages: list[WorkflowStageResult]) -> WorkflowStat
     if any(stage.status == WorkflowStageStatus.NEEDS_REVIEW for stage in stages):
         return WorkflowStatus.NEEDS_REVIEW
     if any(
-        sanitize_stage_summary(stage.output_summary or {}).get("fallback_reason")
-        not in {None, "unknown"}
-        for stage in stages
-    ):
-        return WorkflowStatus.COMPLETED_WITH_FALLBACK
-    if any(
         stage.status
         in {
             WorkflowStageStatus.PENDING,
@@ -257,6 +251,12 @@ def summarize_workflow_status(stages: list[WorkflowStageResult]) -> WorkflowStat
         for stage in stages
     ):
         return WorkflowStatus.PARTIAL
+    if any(
+        sanitize_stage_summary(stage.output_summary or {}).get("fallback_reason")
+        not in {None, "unknown"}
+        for stage in stages
+    ):
+        return WorkflowStatus.COMPLETED_WITH_FALLBACK
     if stages:
         return WorkflowStatus.COMPLETED
     return WorkflowStatus.PARTIAL
