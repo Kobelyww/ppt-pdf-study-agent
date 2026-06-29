@@ -139,6 +139,14 @@ def test_sanitize_stage_summary_normalizes_non_finite_float_values_to_zero():
     assert sanitize_stage_summary({"confidence": "inf"})["confidence"] == 0.0
 
 
+def test_sanitize_stage_summary_normalizes_overflowing_float_values_to_zero():
+    class OverflowingFloat:
+        def __float__(self):
+            raise OverflowError("too large")
+
+    assert sanitize_stage_summary({"confidence": OverflowingFloat()})["confidence"] == 0.0
+
+
 def test_sanitize_stage_summary_normalizes_non_finite_integer_values_to_zero():
     assert sanitize_stage_summary({"chunk_count": float("inf")})["chunk_count"] == 0
     assert sanitize_stage_summary({"chunk_count": float("nan")})["chunk_count"] == 0
@@ -180,6 +188,24 @@ def test_summarize_workflow_status_ignores_unrecognized_fallback_reason():
     )
 
     assert summarize_workflow_status([stage]) == WorkflowStatus.COMPLETED
+
+
+def test_summarize_workflow_status_allows_graph_seed_fallback_reason():
+    stage = WorkflowStageResult(
+        stage_name=WorkflowStageName.RETRIEVE,
+        status=WorkflowStageStatus.PASSED,
+        input_summary={},
+        output_summary={"fallback_reason": "matched graph seed but no chunks recovered"},
+    )
+
+    payload = build_workflow_payload(
+        workflow_id="workflow-123",
+        stages=[stage],
+        needs_review=False,
+    )
+
+    assert summarize_workflow_status([stage]) == WorkflowStatus.COMPLETED_WITH_FALLBACK
+    assert payload["status"] == "completed_with_fallback"
 
 
 def test_summarize_workflow_status_marks_incomplete_stage_states_partial():
@@ -489,6 +515,27 @@ def test_build_workflow_payload_uses_safe_stage_payloads():
         "target": "answer",
     }
     assert "什么是导数" not in json.dumps(payload, ensure_ascii=False)
+
+
+def test_build_workflow_payload_filters_unsafe_workflow_id():
+    payload = build_workflow_payload(
+        workflow_id="raw private text",
+        stages=[],
+        needs_review=False,
+    )
+
+    assert payload["workflow_id"] is None
+    assert "raw private text" not in json.dumps(payload, ensure_ascii=False)
+
+
+def test_build_workflow_payload_keeps_safe_workflow_id():
+    payload = build_workflow_payload(
+        workflow_id="workflow-123",
+        stages=[],
+        needs_review=False,
+    )
+
+    assert payload["workflow_id"] == "workflow-123"
 
 
 def test_new_workflow_id_uses_stable_prefix_and_unique_uuid_hex():

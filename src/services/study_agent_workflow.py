@@ -79,6 +79,7 @@ _SAFE_STRING_VALUES = {
         "persisted_chunks_incomplete",
         "no graph configured",
         "no graph seed matched",
+        "matched graph seed but no chunks recovered",
         "low budget prevents agentic retrieval",
         "agentic step budget exhausted",
         "agentic evidence unavailable",
@@ -270,7 +271,7 @@ def build_workflow_payload(
     status = summarize_workflow_status(stages)
     current_stage = stages[-1].stage_name.value if stages else None
     return {
-        "workflow_id": workflow_id,
+        "workflow_id": _safe_id(workflow_id),
         "status": status.value,
         "current_stage": current_stage,
         "needs_review": needs_review or status == WorkflowStatus.NEEDS_REVIEW,
@@ -303,7 +304,7 @@ def _safe_float(value: Any) -> float:
         return 0.0
     try:
         safe_value = float(value or 0.0)
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         return 0.0
     return safe_value if math.isfinite(safe_value) else 0.0
 
