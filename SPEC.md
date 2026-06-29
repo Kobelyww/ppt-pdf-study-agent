@@ -10,6 +10,7 @@ MVP-9 的目标是在 MVP-8 正式产品底座之上补齐可追踪的 agent 学
 - Study Agent frontend workbench: authenticated users can select one or more ready documents, query the Study Agent, and inspect generated content, citations, evidence, retrieval mode, confidence, and review status from the web UI.
 - RAG quality observability: Study Agent query traces, index health summaries, deterministic RAG evaluation reports, and route readiness gates are available for the current Phase 3 product slice before changing Graph RAG or Agentic RAG routing thresholds.
 - Route policy P2 status: evaluation fixtures now encode expected category, router mode, selected mode under ready/not-ready index states, persisted chunk requirements, max allowed cost, and policy notes. Generated evaluation reports expose only aggregate policy status/category/mode counts so admin diagnostics do not include raw query text, answers, chunk content, prompts, source snippets, hidden reasoning, tokens, passwords, or secrets.
+- Agent workflow supervisor: implemented as a deterministic stage supervisor over the Study Agent runtime. It exposes safe workflow status and stage timelines while keeping multi-agent roles as service boundaries before any open-ended autonomous agent behavior.
 
 ## 0.1 历史状态：MVP-8 正式产品基础
 

@@ -21,6 +21,8 @@ Study Agent queries now require explicit `document_ids` and prefer persisted chu
 
 Study Agent queries also create safe trace summaries for product observability. Trace metadata records route, index fallback, confidence, recall, latency, and review status without storing raw private query text, generated answers, chunk content, or source snippets.
 
+Study Agent workflow supervision now exposes a safe stage timeline for intake, planning, retrieval, generation, verification, review gate, and trace. Workflow diagnostics are compact and privacy-safe: they include status, counts, mode/category labels, fallback and review reason codes, but not raw queries, generated answers, chunks, prompts, hidden reasoning, or secrets.
+
 RAG route policy P2 is now represented in deterministic evaluation fixtures and reports. The fixture set covers direct lookup, definition, concept relation, learning path, multi-document synthesis, question generation, and outline fragment cases; evaluation reports include privacy-safe policy status and category summaries without raw query, answer, chunk, prompt, or source snippet text.
 
 The frontend workbench includes a Study Agent panel for one or more ready documents, grounded answer/question/note generation, citation display, confidence, and review status.
