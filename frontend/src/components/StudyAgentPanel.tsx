@@ -60,6 +60,20 @@ function initialDocumentIds(documents: ApiDocument[], selectedDocumentId: string
   return ready[0]?.id ? [ready[0].id] : [];
 }
 
+function workflowStatusMarkerClass(status: string | null | undefined) {
+  switch (status) {
+    case "completed":
+    case "failed":
+    case "skipped":
+    case "running":
+      return `study-agent-workflow-marker-${status}`;
+    case "needs_review":
+      return "study-agent-workflow-marker-needs-review";
+    default:
+      return "study-agent-workflow-marker-default";
+  }
+}
+
 function WorkflowTimeline({ workflow }: { workflow: StudyAgentResult["workflow"] }) {
   if (!workflow) return null;
   return (
@@ -74,6 +88,10 @@ function WorkflowTimeline({ workflow }: { workflow: StudyAgentResult["workflow"]
       <ol>
         {workflow.stages.map((stage, index) => (
           <li key={`${stage.stage}-${stage.status}-${index}`}>
+            <span
+              className={`study-agent-workflow-marker ${workflowStatusMarkerClass(stage.status)}`}
+              aria-hidden="true"
+            />
             <span>{stage.stage}</span>
             <span>{stage.status}</span>
             {typeof stage.duration_ms === "number" ? (

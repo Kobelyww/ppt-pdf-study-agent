@@ -855,7 +855,7 @@ dd {
 
 .study-agent-workflow li {
   display: grid;
-  grid-template-columns: minmax(90px, 1fr) minmax(70px, auto) auto auto auto;
+  grid-template-columns: 12px minmax(90px, 1fr) minmax(70px, auto) auto auto auto;
   gap: 8px;
   align-items: center;
 }
@@ -863,6 +863,45 @@ dd {
 .study-agent-workflow li span {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.study-agent-workflow-marker {
+  width: 10px;
+  height: 10px;
+  border: 2px solid #94a3b8;
+  border-radius: 50%;
+  background: #ffffff;
+  justify-self: center;
+}
+
+.study-agent-workflow-marker-completed {
+  border-color: #17803d;
+  background: #17803d;
+}
+
+.study-agent-workflow-marker-failed {
+  border-color: #b42318;
+  background: #fee4e2;
+}
+
+.study-agent-workflow-marker-skipped {
+  border-color: #94a3b8;
+  background: #e2e8f0;
+}
+
+.study-agent-workflow-marker-needs-review {
+  border-color: #d97706;
+  background: #fef3c7;
+}
+
+.study-agent-workflow-marker-running {
+  border-color: #1d5fa8;
+  background: #dbeafe;
+}
+
+.study-agent-workflow-marker-default {
+  border-color: #94a3b8;
+  background: #ffffff;
 }
 
 .warning-banner {
@@ -1006,9 +1045,22 @@ dd {
   .review-list li,
   .document-checklist > div,
   .agent-control-grid,
-  .agent-trace,
-  .study-agent-workflow li {
+  .agent-trace {
     grid-template-columns: 1fr;
+  }
+
+  .study-agent-workflow li {
+    grid-template-columns: 12px minmax(0, 1fr);
+  }
+
+  .study-agent-workflow li span:not(.study-agent-workflow-marker) {
+    grid-column: 2;
+  }
+
+  .study-agent-workflow-marker {
+    grid-row: 1 / -1;
+    align-self: start;
+    margin-top: 0.25em;
   }
 
   .stage-marker {
