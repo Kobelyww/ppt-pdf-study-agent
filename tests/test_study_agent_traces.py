@@ -20,6 +20,7 @@ from src.services.study_agent import (
 )
 from src.services.study_agent_trace import StudyAgentTraceService
 from src.services.study_agent_trace import safe_policy_metadata
+from src.services.study_agent_workflow import new_workflow_id
 
 
 def _session_factory():
@@ -253,6 +254,169 @@ def test_get_trace_is_scoped_to_owner_and_can_include_query_hash():
     assert owner_payload["query_hash"].startswith("sha256:")
     assert "什么是导数？" not in json.dumps(owner_payload, ensure_ascii=False)
     assert other_owner_payload is None
+
+
+def test_trace_persists_safe_workflow_payload():
+    SessionFactory = _session_factory()
+    service = StudyAgentTraceService(SessionFactory)
+    result = _study_result()
+    workflow_id = new_workflow_id()
+    result.audit_metadata["workflow"] = {
+        "workflow_id": workflow_id,
+        "status": "completed",
+        "current_stage": "trace",
+        "needs_review": False,
+        "stage_count": 2,
+        "stages": [
+            {
+                "stage": "intake",
+                "status": "passed",
+                "duration_ms": 2.5,
+                "input_summary": {
+                    "workflow_id": workflow_id,
+                    "query": "什么是导数？",
+                    "document_count": 1,
+                    "document_ids": ["doc-1"],
+                    "prompt": "hidden prompt",
+                },
+                "output_summary": {
+                    "target": "answer",
+                    "expected_term_count": 2,
+                    "chunk_content": "导数原文",
+                },
+                "error_code": None,
+                "review_reason": None,
+            },
+            {
+                "stage": "retrieve",
+                "status": "passed",
+                "duration_ms": 8.0,
+                "input_summary": {
+                    "selected_mode": "simple_rag",
+                    "source_snippets": ["导数原文"],
+                },
+                "output_summary": {
+                    "chunk_count": 4,
+                    "source_count": 1,
+                    "chunk_content": "导数原文",
+                    "token": "sk-secret-token",
+                },
+            },
+        ],
+    }
+
+    payload = service.record_success(
+        owner_id="owner-1",
+        request_id="req-workflow",
+        result=result,
+        latency_ms=42.5,
+        index_statuses={},
+    )
+
+    assert payload["workflow"]["workflow_id"] == workflow_id
+    assert payload["workflow"]["status"] == "completed"
+    assert payload["workflow"]["current_stage"] == "trace"
+    assert payload["workflow"]["stage_count"] == 2
+    assert payload["workflow"]["stages"] == [
+        {
+            "stage": "intake",
+            "status": "passed",
+            "duration_ms": 2.5,
+            "input_summary": {
+                "workflow_id": workflow_id,
+                "document_count": 1,
+                "document_ids": ["doc-1"],
+            },
+            "output_summary": {"target": "answer", "expected_term_count": 2},
+            "error_code": None,
+            "review_reason": None,
+        },
+        {
+            "stage": "retrieve",
+            "status": "passed",
+            "duration_ms": 8.0,
+            "input_summary": {"selected_mode": "simple_rag"},
+            "output_summary": {"chunk_count": 4, "source_count": 1},
+            "error_code": None,
+            "review_reason": None,
+        },
+    ]
+    serialized = json.dumps(payload["workflow"], ensure_ascii=False, sort_keys=True)
+    for value in ["什么是导数？", "导数原文", "hidden prompt", "sk-secret-token"]:
+        assert value not in serialized
+    for key in ["query", "chunk_content", "source_snippets", "prompt", "token"]:
+        assert key not in serialized
+
+
+def test_get_trace_returns_workflow_only_to_owner():
+    SessionFactory = _session_factory()
+    service = StudyAgentTraceService(SessionFactory)
+    result = _study_result()
+    workflow_id = new_workflow_id()
+    result.audit_metadata["workflow"] = {
+        "workflow_id": workflow_id,
+        "status": "completed",
+        "current_stage": "trace",
+        "needs_review": False,
+        "stage_count": 1,
+        "stages": [
+            {
+                "stage": "trace",
+                "status": "passed",
+                "input_summary": {"workflow_id": workflow_id},
+                "output_summary": {"source_count": 1},
+            }
+        ],
+    }
+
+    created = service.record_success(
+        owner_id="owner-1",
+        request_id="req-workflow-owner",
+        result=result,
+        latency_ms=10.0,
+        index_statuses={},
+    )
+
+    owner_payload = service.get_trace("owner-1", created["trace_id"])
+    other_owner_payload = service.get_trace("owner-2", created["trace_id"])
+
+    assert owner_payload is not None
+    assert owner_payload["workflow"]["workflow_id"] == workflow_id
+    assert other_owner_payload is None
+
+
+def test_trace_drops_workflow_with_unsafe_workflow_id():
+    SessionFactory = _session_factory()
+    service = StudyAgentTraceService(SessionFactory)
+    result = _study_result()
+    result.audit_metadata["workflow"] = {
+        "workflow_id": "workflow-1",
+        "status": "completed",
+        "current_stage": "trace",
+        "needs_review": False,
+        "stage_count": 1,
+        "stages": [
+            {
+                "stage": "trace",
+                "status": "passed",
+                "input_summary": {"workflow_id": "sk-secret-token"},
+                "output_summary": {"source_count": 1},
+            }
+        ],
+    }
+
+    payload = service.record_success(
+        owner_id="owner-1",
+        request_id="req-workflow-unsafe",
+        result=result,
+        latency_ms=10.0,
+        index_statuses={},
+    )
+    trace = service.get_trace("owner-1", payload["trace_id"])
+
+    assert "workflow" not in payload
+    assert trace is not None
+    assert "workflow" not in trace
 
 
 def test_trace_serializes_safe_policy_subset():

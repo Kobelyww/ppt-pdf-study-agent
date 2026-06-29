@@ -15,6 +15,7 @@ from src.services.study_agent_documents import StudyAgentDocumentError
 from src.services.study_agent_index import StudyDocumentIndexService
 from src.services.study_agent_runtime import StudyAgentRuntimeService
 from src.services.study_agent_trace import StudyAgentTraceService, safe_policy_metadata
+from src.services.study_agent_workflow import sanitize_workflow_payload
 
 
 class StudyAgentQueryRequest(BaseModel):
@@ -80,6 +81,9 @@ async def query_study_agent(
     policy = safe_policy_metadata(audit_metadata.get("policy"))
     if policy is not None:
         response_payload["policy"] = policy
+    workflow = sanitize_workflow_payload(audit_metadata.get("workflow"))
+    if workflow is not None:
+        response_payload["workflow"] = workflow
     if trace_payload is not None:
         response_payload["trace"] = trace_payload
     return response_payload
@@ -101,6 +105,24 @@ def get_study_agent_trace(request: Request, trace_id: str) -> dict[str, Any]:
     if trace is None:
         raise HTTPException(status_code=404, detail="Trace not found")
     return trace
+
+
+@router.get("/workflows/{workflow_id}")
+def get_study_agent_workflow(request: Request, workflow_id: str) -> dict[str, Any]:
+    context = get_user_context(request)
+    session_factory = getattr(request.app.state, "session_factory", None)
+    if session_factory is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Study agent trace store is not configured",
+        )
+    workflow = StudyAgentTraceService(session_factory).get_workflow(
+        owner_id=context.user_id,
+        workflow_id=workflow_id,
+    )
+    if workflow is None:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    return workflow
 
 
 @router.get("/index-summary")
@@ -210,6 +232,9 @@ def _trace_payload_without_persistence(
     policy = safe_policy_metadata(audit_metadata.get("policy"))
     if policy is not None:
         trace_payload["policy"] = policy
+    workflow = sanitize_workflow_payload(audit_metadata.get("workflow"))
+    if workflow is not None:
+        trace_payload["workflow"] = workflow
     return trace_payload
 
 

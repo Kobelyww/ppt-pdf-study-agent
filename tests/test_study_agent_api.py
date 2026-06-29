@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -29,6 +30,7 @@ from src.services.study_agent import (
     StudyTarget,
     StudyVerification,
 )
+from src.services.study_agent_workflow import new_workflow_id
 from src.storage.backend import LocalStorageBackend
 
 
@@ -135,6 +137,89 @@ class SensitivePolicyStudyAgentOrchestrator:
                     "blocked_reason": "raw chunk: 导数描述函数的变化率。",
                     "fallback_chain": ["simple_rag", "secret-token"],
                     "policy_version": "rag-policy-v1",
+                },
+            },
+        )
+
+
+@dataclass
+class WorkflowStudyAgentOrchestrator:
+    workflow_id: str
+
+    async def run(self, payload: dict) -> StudyAgentResult:
+        request = StudyRequest(query=payload["query"], target=StudyTarget.ANSWER)
+        evidence = EvidenceBundle(
+            mode=RetrievalMode.SIMPLE,
+            chunks=(Chunk(content="导数描述函数的变化率。", source="calculus:derivative"),),
+            sources=("calculus:derivative",),
+            concept_ids=("kp-derivative",),
+            confidence=0.8,
+            reason="simple token-overlap retrieval",
+        )
+        return StudyAgentResult(
+            request=request,
+            plan=StudyPlan(
+                mode=RetrievalMode.SIMPLE,
+                reason="definition or direct lookup query",
+                steps=("retrieve_chunks",),
+                estimated_cost="low",
+            ),
+            evidence=evidence,
+            draft=StudyDraft(
+                target=StudyTarget.ANSWER,
+                content="导数描述函数的变化率。",
+                citations=("calculus:derivative",),
+                used_chunk_count=1,
+            ),
+            verification=StudyVerification(
+                passed=True,
+                needs_review=False,
+                confidence=0.8,
+                issues=(),
+                source_recall=1.0,
+                answer_term_recall=1.0,
+            ),
+            audit_metadata={
+                "mode": "simple_rag",
+                "target": "answer",
+                "needs_review": False,
+                "source_count": 1,
+                "chunk_count": 1,
+                "workflow": {
+                    "workflow_id": self.workflow_id,
+                    "status": "completed",
+                    "current_stage": "trace",
+                    "needs_review": False,
+                    "stage_count": 2,
+                    "stages": [
+                        {
+                            "stage": "intake",
+                            "status": "passed",
+                            "duration_ms": 1.5,
+                            "input_summary": {
+                                "workflow_id": self.workflow_id,
+                                "query": "什么是导数？",
+                                "document_count": 0,
+                                "prompt": "hidden prompt",
+                            },
+                            "output_summary": {
+                                "target": "answer",
+                                "chunk_content": "导数原文",
+                            },
+                        },
+                        {
+                            "stage": "retrieve",
+                            "status": "passed",
+                            "duration_ms": 3.0,
+                            "input_summary": {"selected_mode": "simple_rag"},
+                            "output_summary": {
+                                "chunk_count": 1,
+                                "source_count": 1,
+                                "chunk_content": "导数原文",
+                                "token": "sk-secret-token",
+                            },
+                        },
+                    ],
                 },
             },
         )
@@ -475,6 +560,106 @@ def test_study_agent_query_response_does_not_expose_raw_audit_metadata_policy():
         "secret-token",
     ]:
         assert value not in serialized
+
+
+def test_study_agent_query_returns_safe_workflow_payload(tmp_path: Path):
+    workflow_id = new_workflow_id()
+    Session = _session_factory()
+    app = create_app(
+        session_factory=Session,
+        secret_key="test-secret",
+        allow_dev_user_header=False,
+        study_agent_orchestrator=WorkflowStudyAgentOrchestrator(workflow_id),
+    )
+    client = TestClient(app)
+    headers = _login(client)
+
+    response = client.post(
+        "/api/study-agent/query",
+        json={"query": "什么是导数？"},
+        headers={**headers, "x-request-id": "req-study-workflow"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["workflow"]["workflow_id"] == workflow_id
+    assert payload["workflow"]["status"] == "completed"
+    assert payload["workflow"]["current_stage"] == "trace"
+    assert payload["workflow"]["stage_count"] == 2
+    assert payload["workflow"]["stages"][0]["input_summary"] == {
+        "workflow_id": workflow_id,
+        "document_count": 0,
+    }
+    assert payload["workflow"]["stages"][0]["output_summary"] == {"target": "answer"}
+    assert payload["workflow"]["stages"][1]["output_summary"] == {
+        "chunk_count": 1,
+        "source_count": 1,
+    }
+    assert payload["trace"]["workflow"]["workflow_id"] == workflow_id
+    serialized = json.dumps(
+        {"workflow": payload["workflow"], "trace_workflow": payload["trace"]["workflow"]},
+        ensure_ascii=False,
+    )
+    for value in ["导数原文", "hidden prompt", "sk-secret-token"]:
+        assert value not in serialized
+    for key in ["chunk_content", "prompt", "token"]:
+        assert key not in serialized
+
+
+def test_study_agent_workflow_detail_is_owner_scoped(tmp_path: Path):
+    workflow_id = new_workflow_id()
+    Session = _session_factory()
+    with Session() as session:
+        session.add(
+            UserRecord(
+                id="user-2",
+                email="other@example.com",
+                password_hash=hash_password("password-123"),
+                role="user",
+                is_active=True,
+            )
+        )
+        session.commit()
+    app = create_app(
+        session_factory=Session,
+        secret_key="test-secret",
+        allow_dev_user_header=False,
+        study_agent_orchestrator=WorkflowStudyAgentOrchestrator(workflow_id),
+    )
+    client = TestClient(app)
+    owner_headers = _login(client)
+    other_login = client.post(
+        "/api/auth/login",
+        json={"email": "other@example.com", "password": "password-123"},
+    )
+    assert other_login.status_code == 200
+    other_headers = {"Authorization": f"Bearer {other_login.json()['access_token']}"}
+
+    query_response = client.post(
+        "/api/study-agent/query",
+        json={"query": "什么是导数？"},
+        headers={**owner_headers, "x-request-id": "req-study-workflow-detail"},
+    )
+    assert query_response.status_code == 200
+    workflow_id = query_response.json()["workflow"]["workflow_id"]
+
+    owner_detail = client.get(
+        f"/api/study-agent/workflows/{workflow_id}",
+        headers=owner_headers,
+    )
+    other_detail = client.get(
+        f"/api/study-agent/workflows/{workflow_id}",
+        headers=other_headers,
+    )
+
+    assert owner_detail.status_code == 200
+    assert owner_detail.json()["workflow_id"] == workflow_id
+    assert owner_detail.json()["stages"][1]["output_summary"] == {
+        "chunk_count": 1,
+        "source_count": 1,
+    }
+    assert other_detail.status_code == 404
+    assert "导数原文" not in owner_detail.text
 
 
 def test_trace_detail_api_returns_owner_scoped_safe_trace(tmp_path: Path):

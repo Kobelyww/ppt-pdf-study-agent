@@ -108,6 +108,7 @@ _SAFE_STRING_VALUES = {
 _SAFE_INT_KEYS = {
     "document_count",
     "chunk_count",
+    "expected_term_count",
     "source_count",
     "concept_count",
     "issue_count",
@@ -283,6 +284,75 @@ def build_workflow_payload(
         "stage_count": len(stages),
         "stages": [stage.to_safe_dict() for stage in stages],
     }
+
+
+def sanitize_workflow_payload(payload: Any) -> dict[str, Any] | None:
+    if not isinstance(payload, dict):
+        return None
+
+    workflow_id = _safe_workflow_id(payload.get("workflow_id"))
+    if workflow_id is None:
+        return None
+
+    safe: dict[str, Any] = {"workflow_id": workflow_id}
+    status = _allowed_safe_string("status", payload.get("status"))
+    if status is not None:
+        safe["status"] = status
+
+    current_stage = _allowed_safe_string("stage", payload.get("current_stage"))
+    if current_stage is not None:
+        safe["current_stage"] = current_stage
+
+    if isinstance(payload.get("needs_review"), bool):
+        safe["needs_review"] = payload["needs_review"]
+
+    safe_stages = _sanitize_workflow_stages(payload.get("stages"))
+    safe["stage_count"] = len(safe_stages)
+    safe["stages"] = safe_stages
+    return safe
+
+
+def _sanitize_workflow_stages(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+
+    safe_stages: list[dict[str, Any]] = []
+    for raw_stage in value:
+        if not isinstance(raw_stage, dict):
+            continue
+
+        stage = _allowed_safe_string("stage", raw_stage.get("stage"))
+        status = _allowed_safe_string("status", raw_stage.get("status"))
+        if stage is None or status is None:
+            continue
+
+        safe_stage = {
+            "stage": stage,
+            "status": status,
+            "duration_ms": _safe_float(raw_stage.get("duration_ms")),
+            "input_summary": _sanitize_stage_summary_value(
+                raw_stage.get("input_summary")
+            ),
+            "output_summary": _sanitize_stage_summary_value(
+                raw_stage.get("output_summary")
+            ),
+            "error_code": _safe_string("error_code", raw_stage.get("error_code")),
+            "review_reason": _safe_string("review_reason", raw_stage.get("review_reason")),
+        }
+        safe_stages.append(safe_stage)
+    return safe_stages
+
+
+def _sanitize_stage_summary_value(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    return sanitize_stage_summary(value)
+
+
+def _allowed_safe_string(key: str, value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    return value if value in _SAFE_STRING_VALUES[key] else None
 
 
 def _safe_string(key: str, value: Any) -> str | None:

@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from src.db import StudyAgentTraceRecord
 from src.services.study_agent import StudyAgentResult
+from src.services.study_agent_workflow import sanitize_workflow_payload
 
 
 _SAFE_POLICY_KEYS = {
@@ -77,6 +78,9 @@ class StudyAgentTraceService:
         }
         if safe_policy is not None:
             trace_metadata["policy"] = safe_policy
+        workflow = sanitize_workflow_payload(result.audit_metadata.get("workflow"))
+        if workflow is not None:
+            trace_metadata["workflow"] = workflow
 
         record = StudyAgentTraceRecord(
             id=f"trace-{uuid4().hex}",
@@ -118,6 +122,21 @@ class StudyAgentTraceService:
             if record is None:
                 return None
             return _trace_payload(record, include_hash=True)
+
+    def get_workflow(self, owner_id: str, workflow_id: str) -> dict[str, Any] | None:
+        with self.session_factory() as session:
+            records = session.scalars(
+                select(StudyAgentTraceRecord).where(
+                    StudyAgentTraceRecord.owner_id == owner_id,
+                )
+            )
+            for record in records:
+                workflow = sanitize_workflow_payload(
+                    (record.trace_metadata or {}).get("workflow")
+                )
+                if workflow is not None and workflow.get("workflow_id") == workflow_id:
+                    return workflow
+        return None
 
 
 def _query_hash(query: str) -> str:
@@ -240,4 +259,7 @@ def _trace_payload(
     policy = safe_policy_metadata((record.trace_metadata or {}).get("policy"))
     if policy is not None:
         payload["policy"] = policy
+    workflow = sanitize_workflow_payload((record.trace_metadata or {}).get("workflow"))
+    if workflow is not None:
+        payload["workflow"] = workflow
     return payload
