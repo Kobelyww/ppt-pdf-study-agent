@@ -30,6 +30,14 @@ from src.services.study_agent_index import (
     StudyDocumentIndexService,
     persisted_chunk_set_is_complete,
 )
+from src.services.study_agent_workflow import (
+    ReviewGate,
+    WorkflowStageName,
+    WorkflowStageResult,
+    WorkflowStageStatus,
+    build_workflow_payload,
+    new_workflow_id,
+)
 
 
 class StudyAgentRuntimeService:
@@ -71,12 +79,44 @@ class StudyAgentRuntimeService:
     async def run(self, payload: dict[str, Any]):
         request = normalize_study_request(payload)
         started_at = perf_counter()
+        workflow_id = new_workflow_id()
+        stages: list[WorkflowStageResult] = []
+
+        def add_stage(
+            name: WorkflowStageName,
+            *,
+            status: WorkflowStageStatus = WorkflowStageStatus.PASSED,
+            input_summary: dict[str, Any] | None = None,
+            output_summary: dict[str, Any] | None = None,
+            error_code: str | None = None,
+            review_reason: str | None = None,
+        ) -> None:
+            stages.append(
+                WorkflowStageResult(
+                    stage_name=name,
+                    status=status,
+                    input_summary=input_summary or {},
+                    output_summary=output_summary or {},
+                    duration_ms=0.0,
+                    error_code=error_code,
+                    review_reason=review_reason,
+                )
+            )
+
         if not request.authenticated_user_id:
             raise StudyAgentDocumentError(
                 status_code=422,
                 code="authentication_required",
                 detail="Study Agent requires an authenticated user.",
             )
+        add_stage(
+            WorkflowStageName.INTAKE,
+            output_summary={
+                "document_count": len(request.document_ids),
+                "target": request.target.value,
+                "estimated_cost": request.budget.value,
+            },
+        )
 
         evidence = self.evidence_source.load(
             owner_id=request.authenticated_user_id,
@@ -156,6 +196,17 @@ class StudyAgentRuntimeService:
             budget=request.budget.value,
             preferred_mode=request.preferred_mode,
         )
+        add_stage(
+            WorkflowStageName.PLAN,
+            output_summary={
+                "selected_mode": policy_decision.selected_mode.value,
+                "router_mode": policy_decision.router_mode.value,
+                "category": policy_decision.category,
+                "policy_status": policy_decision.status,
+                "readiness_status": policy_decision.readiness_status,
+                "estimated_cost": policy_decision.estimated_cost,
+            },
+        )
         safe_policy = policy_decision.to_safe_dict()
         orchestrator_payload = {
             **payload,
@@ -178,11 +229,85 @@ class StudyAgentRuntimeService:
             router=self.router,
         )
         result = await orchestrator.run(orchestrator_payload)
+        add_stage(
+            WorkflowStageName.RETRIEVE,
+            output_summary={
+                "chunk_count": len(result.evidence.chunks),
+                "source_count": len(result.evidence.sources),
+                "concept_count": len(result.evidence.concept_ids),
+                "chunk_source": chunk_source,
+                "fallback_reason": result.evidence.fallback_reason or fallback_reason,
+                "mode": result.evidence.mode.value,
+            },
+        )
+        add_stage(
+            WorkflowStageName.GENERATE,
+            output_summary={
+                "target": result.draft.target.value,
+                "citation_count": len(result.draft.citations),
+                "used_chunk_count": result.draft.used_chunk_count,
+                "mode": result.evidence.mode.value,
+            },
+        )
+        add_stage(
+            WorkflowStageName.VERIFY,
+            status=(
+                WorkflowStageStatus.PASSED
+                if not result.verification.needs_review
+                else WorkflowStageStatus.NEEDS_REVIEW
+            ),
+            output_summary={
+                "needs_review": result.verification.needs_review,
+                "confidence": result.verification.confidence,
+                "source_recall": result.verification.source_recall,
+                "answer_term_recall": result.verification.answer_term_recall,
+                "issue_count": len(result.verification.issues),
+            },
+            review_reason=("verification_failed" if result.verification.needs_review else None),
+        )
+        review_decision = ReviewGate().evaluate(
+            target=result.request.target,
+            evidence=result.evidence,
+            draft=result.draft,
+            verification=result.verification,
+            policy_status=safe_policy.get("status"),
+        )
+        add_stage(
+            WorkflowStageName.REVIEW_GATE,
+            status=review_decision.status,
+            output_summary={
+                "needs_review": review_decision.status == WorkflowStageStatus.NEEDS_REVIEW,
+                "review_reason": (
+                    review_decision.review_reasons[0]
+                    if review_decision.review_reasons
+                    else None
+                ),
+            },
+            review_reason=(
+                review_decision.review_reasons[0]
+                if review_decision.review_reasons
+                else None
+            ),
+        )
+        add_stage(
+            WorkflowStageName.TRACE,
+            output_summary={
+                "latency_ms": round((perf_counter() - started_at) * 1000, 3),
+                "stage_count": len(stages) + 1,
+            },
+        )
+        workflow = build_workflow_payload(
+            workflow_id=workflow_id,
+            stages=stages,
+            needs_review=result.verification.needs_review
+            or review_decision.status == WorkflowStageStatus.NEEDS_REVIEW,
+        )
         result.audit_metadata["chunk_source"] = chunk_source
         result.audit_metadata["fallback_reason"] = fallback_reason
         result.audit_metadata["index_statuses"] = index_statuses
         result.audit_metadata["policy"] = safe_policy
         result.audit_metadata["latency_ms"] = round((perf_counter() - started_at) * 1000, 3)
+        result.audit_metadata["workflow"] = workflow
         return result
 
     def _graph_for(self, evidence: tuple[StudyDocumentEvidence, ...]) -> KnowledgeGraph | None:

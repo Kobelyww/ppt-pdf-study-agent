@@ -414,3 +414,93 @@ async def test_runtime_returns_review_needed_for_retrieval_miss_against_valid_ch
     assert result.evidence.confidence == 0.0
     assert result.verification.needs_review is True
     assert "no evidence chunks used" in result.verification.issues
+
+
+@pytest.mark.asyncio
+async def test_runtime_attaches_completed_workflow_timeline():
+    Session = _session_factory()
+    _insert_ready_document_with_artifact(Session)
+    runtime = StudyAgentRuntimeService(
+        session_factory=Session,
+        chunker=StudyDocumentChunker(max_chars=200, overlap_chars=20),
+    )
+
+    result = await runtime.run(
+        {
+            "query": "What do derivatives measure?",
+            "target": "answer",
+            "document_ids": ["doc-study"],
+            "expected_terms": ["rate"],
+            "authenticated_user_id": "user-1",
+            "request_id": "req-workflow-complete",
+        }
+    )
+
+    workflow = result.audit_metadata["workflow"]
+    assert workflow["workflow_id"].startswith("workflow-")
+    assert workflow["status"] in {"completed", "completed_with_fallback"}
+    assert workflow["current_stage"] == "trace"
+    assert workflow["needs_review"] is False
+    assert [stage["stage"] for stage in workflow["stages"]] == [
+        "intake",
+        "plan",
+        "retrieve",
+        "generate",
+        "verify",
+        "review_gate",
+        "trace",
+    ]
+    assert workflow["stages"][0]["output_summary"]["document_count"] == 1
+    assert workflow["stages"][1]["output_summary"]["selected_mode"] == "simple_rag"
+    assert workflow["stages"][2]["output_summary"]["chunk_count"] == 1
+    assert workflow["stages"][3]["output_summary"]["citation_count"] == 1
+    assert workflow["stages"][4]["output_summary"]["confidence"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_runtime_workflow_records_fallback_and_review_gate():
+    Session = _session_factory()
+    _insert_ready_document_with_artifact(Session)
+    runtime = StudyAgentRuntimeService(
+        session_factory=Session,
+        chunker=StudyDocumentChunker(max_chars=200, overlap_chars=20),
+    )
+
+    result = await runtime.run(
+        {
+            "query": "基于导数出一道题",
+            "target": "question",
+            "document_ids": ["doc-study"],
+            "authenticated_user_id": "user-1",
+            "request_id": "req-workflow-review",
+        }
+    )
+
+    workflow = result.audit_metadata["workflow"]
+    retrieve_stage = next(stage for stage in workflow["stages"] if stage["stage"] == "retrieve")
+    review_stage = next(stage for stage in workflow["stages"] if stage["stage"] == "review_gate")
+
+    assert retrieve_stage["output_summary"]["fallback_reason"] == "persisted_chunks_missing"
+    assert workflow["status"] in {"completed_with_fallback", "needs_review"}
+    assert review_stage["status"] in {"passed", "needs_review"}
+    assert "query" not in str(workflow).lower()
+    assert "导数" not in str(workflow)
+
+
+@pytest.mark.asyncio
+async def test_runtime_workflow_failure_for_missing_evidence_is_safe():
+    Session = _session_factory()
+    runtime = StudyAgentRuntimeService(session_factory=Session)
+
+    with pytest.raises(StudyAgentDocumentError) as exc_info:
+        await runtime.run(
+            {
+                "query": "What do derivatives measure?",
+                "target": "answer",
+                "document_ids": ["missing-doc"],
+                "authenticated_user_id": "user-1",
+                "request_id": "req-workflow-failed",
+            }
+        )
+
+    assert exc_info.value.status_code == 404
