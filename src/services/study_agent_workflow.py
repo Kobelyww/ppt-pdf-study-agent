@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+import math
 from typing import Any
 from uuid import uuid4
 
@@ -227,7 +228,11 @@ def summarize_workflow_status(stages: list[WorkflowStageResult]) -> WorkflowStat
         return WorkflowStatus.FAILED
     if any(stage.status == WorkflowStageStatus.NEEDS_REVIEW for stage in stages):
         return WorkflowStatus.NEEDS_REVIEW
-    if any((stage.output_summary or {}).get("fallback_reason") for stage in stages):
+    if any(
+        sanitize_stage_summary(stage.output_summary or {}).get("fallback_reason")
+        not in {None, "unknown"}
+        for stage in stages
+    ):
         return WorkflowStatus.COMPLETED_WITH_FALLBACK
     if any(
         stage.status
@@ -271,6 +276,8 @@ def _safe_string(key: str, value: Any) -> str | None:
 
 
 def _safe_int(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
     try:
         return int(value or 0)
     except (TypeError, ValueError):
@@ -279,6 +286,7 @@ def _safe_int(value: Any) -> int:
 
 def _safe_float(value: Any) -> float:
     try:
-        return float(value or 0.0)
+        safe_value = float(value or 0.0)
     except (TypeError, ValueError):
         return 0.0
+    return safe_value if math.isfinite(safe_value) else 0.0

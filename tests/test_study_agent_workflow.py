@@ -92,6 +92,15 @@ def test_sanitize_stage_summary_buckets_unknown_or_unsafe_values():
     }
 
 
+def test_sanitize_stage_summary_normalizes_bool_count_values_to_zero():
+    assert sanitize_stage_summary({"chunk_count": True})["chunk_count"] == 0
+
+
+def test_sanitize_stage_summary_normalizes_non_finite_float_values_to_zero():
+    assert sanitize_stage_summary({"confidence": "nan"})["confidence"] == 0.0
+    assert sanitize_stage_summary({"confidence": "inf"})["confidence"] == 0.0
+
+
 def test_summarize_workflow_status_prefers_failed_then_needs_review_then_fallback():
     failed = WorkflowStageResult(
         stage_name=WorkflowStageName.RETRIEVE,
@@ -117,6 +126,17 @@ def test_summarize_workflow_status_prefers_failed_then_needs_review_then_fallbac
     assert summarize_workflow_status([failed]) == WorkflowStatus.FAILED
     assert summarize_workflow_status([fallback, needs_review]) == WorkflowStatus.NEEDS_REVIEW
     assert summarize_workflow_status([fallback]) == WorkflowStatus.COMPLETED_WITH_FALLBACK
+
+
+def test_summarize_workflow_status_ignores_unrecognized_fallback_reason():
+    stage = WorkflowStageResult(
+        stage_name=WorkflowStageName.RETRIEVE,
+        status=WorkflowStageStatus.PASSED,
+        input_summary={},
+        output_summary={"fallback_reason": "raw private fallback text"},
+    )
+
+    assert summarize_workflow_status([stage]) == WorkflowStatus.COMPLETED
 
 
 def test_summarize_workflow_status_marks_incomplete_stage_states_partial():
