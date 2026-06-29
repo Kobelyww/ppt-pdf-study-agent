@@ -225,7 +225,11 @@ def sanitize_stage_summary(summary: dict[str, Any]) -> dict[str, Any]:
             safe[key] = _safe_float(value)
         elif key in _SAFE_BOOL_KEYS and isinstance(value, bool):
             safe[key] = value
-        elif key in {"workflow_id", "request_id", "owner_id"}:
+        elif key == "workflow_id":
+            safe_id = _safe_workflow_id(value)
+            if safe_id is not None:
+                safe[key] = safe_id
+        elif key in {"request_id", "owner_id"}:
             safe_id = _safe_id(value)
             if safe_id is not None:
                 safe[key] = safe_id

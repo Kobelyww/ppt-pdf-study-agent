@@ -225,6 +225,44 @@ def test_summarize_workflow_status_prefers_partial_over_earlier_fallback():
     assert summarize_workflow_status([retrieve, trace]) == WorkflowStatus.PARTIAL
 
 
+def test_summarize_workflow_status_mixed_priority_regressions():
+    failed = WorkflowStageResult(
+        stage_name=WorkflowStageName.RETRIEVE,
+        status=WorkflowStageStatus.FAILED,
+        input_summary={},
+        output_summary={},
+        error_code="document_evidence_missing",
+    )
+    needs_review = WorkflowStageResult(
+        stage_name=WorkflowStageName.REVIEW_GATE,
+        status=WorkflowStageStatus.NEEDS_REVIEW,
+        input_summary={},
+        output_summary={},
+        review_reason="low_confidence",
+    )
+    partial = WorkflowStageResult(
+        stage_name=WorkflowStageName.TRACE,
+        status=WorkflowStageStatus.RUNNING,
+        input_summary={},
+        output_summary={},
+    )
+    fallback = WorkflowStageResult(
+        stage_name=WorkflowStageName.RETRIEVE,
+        status=WorkflowStageStatus.PASSED,
+        input_summary={},
+        output_summary={"fallback_reason": "persisted_chunks_missing"},
+    )
+
+    assert (
+        summarize_workflow_status([fallback, partial, needs_review, failed])
+        == WorkflowStatus.FAILED
+    )
+    assert (
+        summarize_workflow_status([fallback, partial, needs_review])
+        == WorkflowStatus.NEEDS_REVIEW
+    )
+
+
 def test_summarize_workflow_status_marks_incomplete_stage_states_partial():
     for status in (
         WorkflowStageStatus.PENDING,
@@ -589,7 +627,35 @@ def test_new_workflow_id_uses_stable_prefix_and_unique_uuid_hex():
     int(first.removeprefix("workflow-"), 16)
 
 
-def test_sanitize_stage_summary_allows_owner_id_but_blocks_other_strings():
+def test_sanitize_stage_summary_filters_non_generated_workflow_ids():
+    assert sanitize_stage_summary({"workflow_id": "sk-secret-token"}) == {}
+    assert sanitize_stage_summary({"workflow_id": "workflow-123"}) == {}
+
+
+def test_sanitize_stage_summary_keeps_generated_workflow_id():
+    generated_id = new_workflow_id()
+
+    assert sanitize_stage_summary({"workflow_id": generated_id}) == {
+        "workflow_id": generated_id,
+    }
+
+
+def test_stage_result_safe_dict_filters_nested_secret_like_workflow_id():
+    stage = WorkflowStageResult(
+        stage_name=WorkflowStageName.INTAKE,
+        status=WorkflowStageStatus.PASSED,
+        input_summary={"workflow_id": "sk-secret-token"},
+        output_summary={},
+    )
+
+    payload = stage.to_safe_dict()
+    serialized = json.dumps(payload, ensure_ascii=False)
+
+    assert payload["input_summary"] == {}
+    assert "sk-secret-token" not in serialized
+
+
+def test_sanitize_stage_summary_allows_owner_and_request_ids_but_blocks_other_strings():
     summary = sanitize_stage_summary(
         {
             "workflow_id": "workflow-1",
@@ -600,7 +666,6 @@ def test_sanitize_stage_summary_allows_owner_id_but_blocks_other_strings():
     )
 
     assert summary == {
-        "workflow_id": "workflow-1",
         "request_id": "request-1",
         "owner_id": "user-123",
     }
@@ -617,7 +682,6 @@ def test_sanitize_stage_summary_filters_unsafe_opaque_ids():
     )
 
     assert summary == {
-        "workflow_id": "workflow-123",
         "request_id": "request:abc.123",
         "document_ids": ["doc-1"],
     }
