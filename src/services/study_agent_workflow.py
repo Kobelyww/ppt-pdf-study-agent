@@ -215,6 +215,10 @@ def new_workflow_id() -> str:
     return f"workflow-{uuid4().hex}"
 
 
+def is_safe_workflow_id(value: Any) -> bool:
+    return _safe_workflow_id(value) is not None
+
+
 def sanitize_stage_summary(summary: dict[str, Any]) -> dict[str, Any]:
     safe: dict[str, Any] = {}
     for key, value in summary.items():

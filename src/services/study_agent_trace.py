@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from src.db import StudyAgentTraceRecord
 from src.services.study_agent import StudyAgentResult
-from src.services.study_agent_workflow import sanitize_workflow_payload
+from src.services.study_agent_workflow import is_safe_workflow_id, sanitize_workflow_payload
 
 
 _SAFE_POLICY_KEYS = {
@@ -124,6 +124,9 @@ class StudyAgentTraceService:
             return _trace_payload(record, include_hash=True)
 
     def get_workflow(self, owner_id: str, workflow_id: str) -> dict[str, Any] | None:
+        if not is_safe_workflow_id(workflow_id):
+            return None
+
         with self.session_factory() as session:
             records = session.scalars(
                 select(StudyAgentTraceRecord).where(

@@ -662,6 +662,36 @@ def test_study_agent_workflow_detail_is_owner_scoped(tmp_path: Path):
     assert "导数原文" not in owner_detail.text
 
 
+def test_study_agent_workflow_detail_returns_404_for_malformed_workflow_id(
+    tmp_path: Path,
+):
+    client, _orchestrator, _Session, _document_service = _client(tmp_path)
+    headers = _login(client)
+
+    response = client.get(
+        "/api/study-agent/workflows/workflow-1",
+        headers=headers,
+    )
+
+    assert response.status_code == 404
+
+
+def test_study_agent_workflow_detail_returns_503_without_trace_store():
+    app = create_app(
+        secret_key="test-secret",
+        allow_dev_user_header=True,
+    )
+    client = TestClient(app)
+
+    response = client.get(
+        f"/api/study-agent/workflows/{new_workflow_id()}",
+        headers={"x-user-id": "user-1"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Study agent trace store is not configured"
+
+
 def test_trace_detail_api_returns_owner_scoped_safe_trace(tmp_path: Path):
     client, _orchestrator, _Session, _document_service = _client(tmp_path)
     headers = _login(client)

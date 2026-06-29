@@ -419,6 +419,15 @@ def test_trace_drops_workflow_with_unsafe_workflow_id():
     assert "workflow" not in trace
 
 
+def test_get_workflow_returns_none_for_malformed_workflow_id():
+    def session_factory():
+        raise AssertionError("malformed workflow IDs must not scan traces")
+
+    service = StudyAgentTraceService(session_factory)
+
+    assert service.get_workflow("owner-1", "workflow-1") is None
+
+
 def test_trace_serializes_safe_policy_subset():
     SessionFactory = _session_factory()
     service = StudyAgentTraceService(SessionFactory)
