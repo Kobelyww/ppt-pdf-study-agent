@@ -824,6 +824,47 @@ dd {
   font-weight: 600;
 }
 
+.study-agent-workflow {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid #e5e7eb;
+  padding-top: 10px;
+  color: #374151;
+  font-size: 0.85rem;
+}
+
+.study-agent-workflow-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  font-weight: 600;
+}
+
+.study-agent-workflow-header span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.study-agent-workflow ol {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.study-agent-workflow li {
+  display: grid;
+  grid-template-columns: minmax(90px, 1fr) minmax(70px, auto) auto auto auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.study-agent-workflow li span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .warning-banner {
   padding: 10px 12px;
   border: 1px solid #f5c451;
@@ -965,7 +1006,8 @@ dd {
   .review-list li,
   .document-checklist > div,
   .agent-control-grid,
-  .agent-trace {
+  .agent-trace,
+  .study-agent-workflow li {
     grid-template-columns: 1fr;
   }
 

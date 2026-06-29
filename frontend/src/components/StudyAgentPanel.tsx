@@ -60,6 +60,34 @@ function initialDocumentIds(documents: ApiDocument[], selectedDocumentId: string
   return ready[0]?.id ? [ready[0].id] : [];
 }
 
+function WorkflowTimeline({ workflow }: { workflow: StudyAgentResult["workflow"] }) {
+  if (!workflow) return null;
+  return (
+    <div className="study-agent-workflow">
+      <div className="study-agent-workflow-header">
+        <span>Workflow: {workflow.status ?? "unknown"}</span>
+        <span>Stage: {workflow.current_stage ?? "unknown"}</span>
+        {workflow.needs_review ? (
+          <span className="study-agent-policy-warning">Review</span>
+        ) : null}
+      </div>
+      <ol>
+        {workflow.stages.map((stage, index) => (
+          <li key={`${stage.stage}-${stage.status}-${index}`}>
+            <span>{stage.stage}</span>
+            <span>{stage.status}</span>
+            {typeof stage.duration_ms === "number" ? (
+              <span>{Math.round(stage.duration_ms)}ms</span>
+            ) : null}
+            {stage.review_reason ? <span>{stage.review_reason}</span> : null}
+            {stage.error_code ? <span>{stage.error_code}</span> : null}
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
 function StudyAgentPanel({
   apiClient,
   documents,
@@ -361,6 +389,7 @@ function StudyAgentPanel({
               Evidence index fallback: {result.trace.fallback_reason}
             </div>
           ) : null}
+          <WorkflowTimeline workflow={result.workflow ?? result.trace?.workflow} />
           <pre className="content-block agent-answer">{result.draft.content}</pre>
           <EvidenceViewer result={result} />
         </div>

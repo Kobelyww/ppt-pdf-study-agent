@@ -112,6 +112,25 @@ export interface StudyAgentChunk {
   score: number;
 }
 
+export interface StudyAgentWorkflowStage {
+  stage: string;
+  status: string;
+  duration_ms?: number | null;
+  input_summary?: Record<string, unknown>;
+  output_summary?: Record<string, unknown>;
+  error_code?: string | null;
+  review_reason?: string | null;
+}
+
+export interface StudyAgentWorkflowDiagnostic {
+  workflow_id: string | null;
+  status?: string | null;
+  current_stage?: string | null;
+  needs_review?: boolean | null;
+  stage_count?: number | null;
+  stages: StudyAgentWorkflowStage[];
+}
+
 export interface StudyAgentTraceSummary {
   trace_id: string;
   request_id?: string | null;
@@ -127,6 +146,7 @@ export interface StudyAgentTraceSummary {
   answer_term_recall: number;
   needs_review: boolean;
   latency_ms: number;
+  workflow?: StudyAgentWorkflowDiagnostic | null;
 }
 
 export interface StudyAgentPolicyDiagnostic {
@@ -184,6 +204,7 @@ export interface StudyAgentResult {
   };
   trace?: StudyAgentTraceSummary;
   policy?: StudyAgentPolicyDiagnostic | null;
+  workflow?: StudyAgentWorkflowDiagnostic | null;
   audit_metadata?: Record<string, unknown>;
 }
 
