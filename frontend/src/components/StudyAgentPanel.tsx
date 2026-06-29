@@ -62,7 +62,11 @@ function initialDocumentIds(documents: ApiDocument[], selectedDocumentId: string
 
 function workflowStatusMarkerClass(status: string | null | undefined) {
   switch (status) {
+    case "passed":
     case "completed":
+      return "study-agent-workflow-marker-completed";
+    case "pending":
+      return "study-agent-workflow-marker-pending";
     case "failed":
     case "skipped":
     case "running":
