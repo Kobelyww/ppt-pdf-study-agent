@@ -129,6 +129,7 @@ _SAFE_BOOL_KEYS = {
     "experiment_enabled",
 }
 _SAFE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_:\.-]{1,128}$")
+_GENERATED_WORKFLOW_ID_PATTERN = re.compile(r"^workflow-[0-9a-f]{32}$")
 _BLOCKED_POLICY_STATUSES = _SAFE_STRING_VALUES["policy_status"] & {
     "blocked_by_flag",
     "blocked_by_category",
@@ -271,7 +272,7 @@ def build_workflow_payload(
     status = summarize_workflow_status(stages)
     current_stage = stages[-1].stage_name.value if stages else None
     return {
-        "workflow_id": _safe_id(workflow_id),
+        "workflow_id": _safe_workflow_id(workflow_id),
         "status": status.value,
         "current_stage": current_stage,
         "needs_review": needs_review or status == WorkflowStatus.NEEDS_REVIEW,
@@ -313,3 +314,9 @@ def _safe_id(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
     return value if _SAFE_ID_PATTERN.fullmatch(value) else None
+
+
+def _safe_workflow_id(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    return value if _GENERATED_WORKFLOW_ID_PATTERN.fullmatch(value) else None

@@ -522,7 +522,7 @@ def test_build_workflow_payload_uses_safe_stage_payloads():
         needs_review=False,
     )
 
-    assert payload["workflow_id"] == "workflow-1"
+    assert payload["workflow_id"] is None
     assert payload["status"] == "completed"
     assert payload["current_stage"] == "intake"
     assert payload["needs_review"] is False
@@ -545,14 +545,37 @@ def test_build_workflow_payload_filters_unsafe_workflow_id():
     assert "raw private text" not in json.dumps(payload, ensure_ascii=False)
 
 
-def test_build_workflow_payload_keeps_safe_workflow_id():
+def test_build_workflow_payload_filters_secret_like_workflow_id():
+    payload = build_workflow_payload(
+        workflow_id="sk-secret-token",
+        stages=[],
+        needs_review=False,
+    )
+
+    assert payload["workflow_id"] is None
+    assert "sk-secret-token" not in json.dumps(payload, ensure_ascii=False)
+
+
+def test_build_workflow_payload_filters_non_generated_workflow_id():
     payload = build_workflow_payload(
         workflow_id="workflow-123",
         stages=[],
         needs_review=False,
     )
 
-    assert payload["workflow_id"] == "workflow-123"
+    assert payload["workflow_id"] is None
+
+
+def test_build_workflow_payload_keeps_generated_workflow_id():
+    generated_id = new_workflow_id()
+
+    payload = build_workflow_payload(
+        workflow_id=generated_id,
+        stages=[],
+        needs_review=False,
+    )
+
+    assert payload["workflow_id"] == generated_id
 
 
 def test_new_workflow_id_uses_stable_prefix_and_unique_uuid_hex():
