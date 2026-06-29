@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 import math
+import re
 from typing import Any
 from uuid import uuid4
 
@@ -126,6 +127,14 @@ _SAFE_BOOL_KEYS = {
     "persisted_chunks_used",
     "experiment_enabled",
 }
+_SAFE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_:\.-]{1,128}$")
+_BLOCKED_POLICY_STATUSES = _SAFE_STRING_VALUES["policy_status"] & {
+    "blocked_by_flag",
+    "blocked_by_category",
+    "blocked_by_readiness",
+    "blocked_by_budget",
+    "blocked_by_index_health",
+}
 
 
 @dataclass(frozen=True)
@@ -145,7 +154,7 @@ class WorkflowStageResult:
         return {
             "stage": self.stage_name.value,
             "status": self.status.value,
-            "duration_ms": self.duration_ms,
+            "duration_ms": None if self.duration_ms is None else _safe_float(self.duration_ms),
             "input_summary": sanitize_stage_summary(self.input_summary),
             "output_summary": sanitize_stage_summary(self.output_summary),
             "error_code": _safe_string("error_code", self.error_code),
@@ -181,7 +190,7 @@ class ReviewGate:
             reasons.append("missing_citations")
         if not evidence.chunks:
             reasons.append("empty_evidence")
-        if str(policy_status or "").startswith("blocked") and not evidence.fallback_reason:
+        if policy_status in _BLOCKED_POLICY_STATUSES and not evidence.fallback_reason:
             reasons.append("policy_blocked_without_fallback")
         if (
             evidence.fallback_reason
@@ -214,10 +223,13 @@ def sanitize_stage_summary(summary: dict[str, Any]) -> dict[str, Any]:
             safe[key] = _safe_float(value)
         elif key in _SAFE_BOOL_KEYS and isinstance(value, bool):
             safe[key] = value
-        elif key in {"workflow_id", "request_id", "owner_id"} and isinstance(value, str):
-            safe[key] = value
+        elif key in {"workflow_id", "request_id", "owner_id"}:
+            safe_id = _safe_id(value)
+            if safe_id is not None:
+                safe[key] = safe_id
         elif key == "document_ids" and isinstance(value, (list, tuple)):
-            safe[key] = [str(item) for item in value if str(item).strip()]
+            safe_ids = [_safe_id(item) for item in value]
+            safe[key] = [safe_id for safe_id in safe_ids if safe_id is not None]
         elif value is None and key in _SAFE_STRING_VALUES:
             safe[key] = None
     return safe
@@ -279,14 +291,24 @@ def _safe_int(value: Any) -> int:
     if isinstance(value, bool):
         return 0
     try:
+        if isinstance(value, float) and not math.isfinite(value):
+            return 0
         return int(value or 0)
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         return 0
 
 
 def _safe_float(value: Any) -> float:
+    if isinstance(value, bool):
+        return 0.0
     try:
         safe_value = float(value or 0.0)
     except (TypeError, ValueError):
         return 0.0
     return safe_value if math.isfinite(safe_value) else 0.0
+
+
+def _safe_id(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    return value if _SAFE_ID_PATTERN.fullmatch(value) else None

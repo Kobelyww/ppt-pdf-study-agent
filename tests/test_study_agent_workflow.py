@@ -67,6 +67,44 @@ def test_stage_result_serializes_safe_payload_without_private_values():
     assert "导数描述" not in serialized
 
 
+def test_stage_result_normalizes_unsafe_duration_values():
+    stage = WorkflowStageResult(
+        stage_name=WorkflowStageName.RETRIEVE,
+        status=WorkflowStageStatus.PASSED,
+        input_summary={},
+        output_summary={},
+        duration_ms="private text",
+    )
+
+    payload = stage.to_safe_dict()
+
+    assert payload["duration_ms"] == 0.0
+    assert "private text" not in json.dumps(payload, ensure_ascii=False)
+
+
+def test_stage_result_normalizes_non_finite_bool_and_missing_duration_values():
+    for duration in (float("nan"), float("inf"), True):
+        stage = WorkflowStageResult(
+            stage_name=WorkflowStageName.RETRIEVE,
+            status=WorkflowStageStatus.PASSED,
+            input_summary={},
+            output_summary={},
+            duration_ms=duration,
+        )
+
+        assert stage.to_safe_dict()["duration_ms"] == 0.0
+
+    missing_duration = WorkflowStageResult(
+        stage_name=WorkflowStageName.RETRIEVE,
+        status=WorkflowStageStatus.PASSED,
+        input_summary={},
+        output_summary={},
+        duration_ms=None,
+    )
+
+    assert missing_duration.to_safe_dict()["duration_ms"] is None
+
+
 def test_sanitize_stage_summary_buckets_unknown_or_unsafe_values():
     summary = sanitize_stage_summary(
         {
@@ -99,6 +137,11 @@ def test_sanitize_stage_summary_normalizes_bool_count_values_to_zero():
 def test_sanitize_stage_summary_normalizes_non_finite_float_values_to_zero():
     assert sanitize_stage_summary({"confidence": "nan"})["confidence"] == 0.0
     assert sanitize_stage_summary({"confidence": "inf"})["confidence"] == 0.0
+
+
+def test_sanitize_stage_summary_normalizes_non_finite_integer_values_to_zero():
+    assert sanitize_stage_summary({"chunk_count": float("inf")})["chunk_count"] == 0
+    assert sanitize_stage_summary({"chunk_count": float("nan")})["chunk_count"] == 0
 
 
 def test_summarize_workflow_status_prefers_failed_then_needs_review_then_fallback():
@@ -272,6 +315,43 @@ def test_review_gate_marks_blocked_policy_without_successful_fallback_for_review
     assert decision.review_reasons == ("policy_blocked_without_fallback",)
 
 
+def test_review_gate_ignores_unrecognized_blocked_policy_text_without_fallback():
+    gate = ReviewGate(confidence_threshold=0.5)
+    evidence = EvidenceBundle(
+        mode=RetrievalMode.SIMPLE,
+        chunks=(Chunk(content="private", source="doc:1"),),
+        sources=("doc:1",),
+        concept_ids=(),
+        confidence=0.8,
+        reason="simple",
+    )
+    draft = StudyDraft(
+        target=StudyTarget.ANSWER,
+        content="answer",
+        citations=("doc:1",),
+        used_chunk_count=1,
+    )
+    verification = StudyVerification(
+        passed=True,
+        needs_review=False,
+        confidence=0.8,
+        issues=(),
+        source_recall=1.0,
+        answer_term_recall=1.0,
+    )
+
+    decision = gate.evaluate(
+        target=StudyTarget.ANSWER,
+        evidence=evidence,
+        draft=draft,
+        verification=verification,
+        policy_status="blocked private text",
+    )
+
+    assert decision.status == WorkflowStageStatus.PASSED
+    assert "policy_blocked_without_fallback" not in decision.review_reasons
+
+
 def test_review_gate_allows_blocked_policy_with_successful_fallback():
     gate = ReviewGate(confidence_threshold=0.5)
     evidence = EvidenceBundle(
@@ -436,4 +516,21 @@ def test_sanitize_stage_summary_allows_owner_id_but_blocks_other_strings():
         "workflow_id": "workflow-1",
         "request_id": "request-1",
         "owner_id": "user-123",
+    }
+
+
+def test_sanitize_stage_summary_filters_unsafe_opaque_ids():
+    summary = sanitize_stage_summary(
+        {
+            "workflow_id": "workflow-123",
+            "request_id": "request:abc.123",
+            "owner_id": "user@example.com",
+            "document_ids": ["doc-1", "文件名.pdf", "../secret"],
+        }
+    )
+
+    assert summary == {
+        "workflow_id": "workflow-123",
+        "request_id": "request:abc.123",
+        "document_ids": ["doc-1"],
     }
