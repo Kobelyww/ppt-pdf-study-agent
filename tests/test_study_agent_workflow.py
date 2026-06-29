@@ -16,6 +16,7 @@ from src.services.study_agent_workflow import (
     WorkflowStageStatus,
     WorkflowStatus,
     build_workflow_payload,
+    new_workflow_id,
     sanitize_stage_summary,
     summarize_workflow_status,
 )
@@ -118,6 +119,22 @@ def test_summarize_workflow_status_prefers_failed_then_needs_review_then_fallbac
     assert summarize_workflow_status([fallback]) == WorkflowStatus.COMPLETED_WITH_FALLBACK
 
 
+def test_summarize_workflow_status_marks_incomplete_stage_states_partial():
+    for status in (
+        WorkflowStageStatus.PENDING,
+        WorkflowStageStatus.RUNNING,
+        WorkflowStageStatus.SKIPPED,
+    ):
+        stage = WorkflowStageResult(
+            stage_name=WorkflowStageName.RETRIEVE,
+            status=status,
+            input_summary={},
+            output_summary={},
+        )
+
+        assert summarize_workflow_status([stage]) == WorkflowStatus.PARTIAL
+
+
 def test_review_gate_marks_missing_citations_and_synthesis_fallback_for_review():
     gate = ReviewGate(confidence_threshold=0.5)
     evidence = EvidenceBundle(
@@ -161,6 +178,193 @@ def test_review_gate_marks_missing_citations_and_synthesis_fallback_for_review()
     )
 
 
+def test_review_gate_marks_empty_evidence_for_review():
+    gate = ReviewGate(confidence_threshold=0.5)
+    evidence = EvidenceBundle(
+        mode=RetrievalMode.SIMPLE,
+        chunks=(),
+        sources=(),
+        concept_ids=(),
+        confidence=0.8,
+        reason="simple",
+    )
+    draft = StudyDraft(
+        target=StudyTarget.ANSWER,
+        content="answer",
+        citations=("doc:1",),
+        used_chunk_count=0,
+    )
+    verification = StudyVerification(
+        passed=True,
+        needs_review=False,
+        confidence=0.8,
+        issues=(),
+        source_recall=1.0,
+        answer_term_recall=1.0,
+    )
+
+    decision = gate.evaluate(
+        target=StudyTarget.ANSWER,
+        evidence=evidence,
+        draft=draft,
+        verification=verification,
+        policy_status="allowed",
+    )
+
+    assert decision.status == WorkflowStageStatus.NEEDS_REVIEW
+    assert decision.review_reasons == ("empty_evidence",)
+
+
+def test_review_gate_marks_blocked_policy_without_successful_fallback_for_review():
+    gate = ReviewGate(confidence_threshold=0.5)
+    evidence = EvidenceBundle(
+        mode=RetrievalMode.SIMPLE,
+        chunks=(Chunk(content="private", source="doc:1"),),
+        sources=("doc:1",),
+        concept_ids=(),
+        confidence=0.8,
+        reason="simple",
+    )
+    draft = StudyDraft(
+        target=StudyTarget.ANSWER,
+        content="answer",
+        citations=("doc:1",),
+        used_chunk_count=1,
+    )
+    verification = StudyVerification(
+        passed=True,
+        needs_review=False,
+        confidence=0.8,
+        issues=(),
+        source_recall=1.0,
+        answer_term_recall=1.0,
+    )
+
+    decision = gate.evaluate(
+        target=StudyTarget.ANSWER,
+        evidence=evidence,
+        draft=draft,
+        verification=verification,
+        policy_status="blocked_by_budget",
+    )
+
+    assert decision.status == WorkflowStageStatus.NEEDS_REVIEW
+    assert decision.review_reasons == ("policy_blocked_without_fallback",)
+
+
+def test_review_gate_allows_blocked_policy_with_successful_fallback():
+    gate = ReviewGate(confidence_threshold=0.5)
+    evidence = EvidenceBundle(
+        mode=RetrievalMode.SIMPLE,
+        chunks=(Chunk(content="private", source="doc:1"),),
+        sources=("doc:1",),
+        concept_ids=(),
+        confidence=0.8,
+        reason="simple",
+        fallback_reason="agentic evidence unavailable",
+    )
+    draft = StudyDraft(
+        target=StudyTarget.ANSWER,
+        content="answer",
+        citations=("doc:1",),
+        used_chunk_count=1,
+    )
+    verification = StudyVerification(
+        passed=True,
+        needs_review=False,
+        confidence=0.8,
+        issues=(),
+        source_recall=1.0,
+        answer_term_recall=1.0,
+    )
+
+    decision = gate.evaluate(
+        target=StudyTarget.ANSWER,
+        evidence=evidence,
+        draft=draft,
+        verification=verification,
+        policy_status="blocked_by_budget",
+    )
+
+    assert decision.status == WorkflowStageStatus.PASSED
+    assert decision.review_reasons == ()
+
+
+def test_review_gate_marks_agentic_step_budget_exhaustion_for_review():
+    gate = ReviewGate(confidence_threshold=0.5)
+    evidence = EvidenceBundle(
+        mode=RetrievalMode.AGENTIC,
+        chunks=(Chunk(content="private", source="doc:1"),),
+        sources=("doc:1",),
+        concept_ids=(),
+        confidence=0.8,
+        reason="agentic",
+        metadata={"step_budget_exhausted": True},
+    )
+    draft = StudyDraft(
+        target=StudyTarget.ANSWER,
+        content="answer",
+        citations=("doc:1",),
+        used_chunk_count=1,
+    )
+    verification = StudyVerification(
+        passed=True,
+        needs_review=False,
+        confidence=0.8,
+        issues=(),
+        source_recall=1.0,
+        answer_term_recall=1.0,
+    )
+
+    decision = gate.evaluate(
+        target=StudyTarget.ANSWER,
+        evidence=evidence,
+        draft=draft,
+        verification=verification,
+        policy_status="allowed",
+    )
+
+    assert decision.status == WorkflowStageStatus.NEEDS_REVIEW
+    assert decision.review_reasons == ("agentic_step_budget_exhausted",)
+
+
+def test_review_gate_passes_when_contract_conditions_are_satisfied():
+    gate = ReviewGate(confidence_threshold=0.5)
+    evidence = EvidenceBundle(
+        mode=RetrievalMode.SIMPLE,
+        chunks=(Chunk(content="private", source="doc:1"),),
+        sources=("doc:1",),
+        concept_ids=(),
+        confidence=0.8,
+        reason="simple",
+    )
+    draft = StudyDraft(
+        target=StudyTarget.ANSWER,
+        content="answer",
+        citations=("doc:1",),
+        used_chunk_count=1,
+    )
+    verification = StudyVerification(
+        passed=True,
+        needs_review=False,
+        confidence=0.8,
+        issues=(),
+        source_recall=1.0,
+        answer_term_recall=1.0,
+    )
+
+    decision = gate.evaluate(
+        target=StudyTarget.ANSWER,
+        evidence=evidence,
+        draft=draft,
+        verification=verification,
+        policy_status="allowed",
+    )
+
+    assert decision.status == WorkflowStageStatus.PASSED
+    assert decision.review_reasons == ()
+
+
 def test_build_workflow_payload_uses_safe_stage_payloads():
     stage = WorkflowStageResult(
         stage_name=WorkflowStageName.INTAKE,
@@ -185,3 +389,31 @@ def test_build_workflow_payload_uses_safe_stage_payloads():
         "target": "answer",
     }
     assert "什么是导数" not in json.dumps(payload, ensure_ascii=False)
+
+
+def test_new_workflow_id_uses_stable_prefix_and_unique_uuid_hex():
+    first = new_workflow_id()
+    second = new_workflow_id()
+
+    assert first.startswith("workflow-")
+    assert second.startswith("workflow-")
+    assert first != second
+    assert len(first) == len("workflow-") + 32
+    int(first.removeprefix("workflow-"), 16)
+
+
+def test_sanitize_stage_summary_allows_owner_id_but_blocks_other_strings():
+    summary = sanitize_stage_summary(
+        {
+            "workflow_id": "workflow-1",
+            "request_id": "request-1",
+            "owner_id": "user-123",
+            "query": "什么是导数？",
+        }
+    )
+
+    assert summary == {
+        "workflow_id": "workflow-1",
+        "request_id": "request-1",
+        "owner_id": "user-123",
+    }

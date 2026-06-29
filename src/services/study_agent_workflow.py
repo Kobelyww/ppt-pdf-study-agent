@@ -180,7 +180,7 @@ class ReviewGate:
             reasons.append("missing_citations")
         if not evidence.chunks:
             reasons.append("empty_evidence")
-        if str(policy_status or "").startswith("blocked") and evidence.mode != RetrievalMode.SIMPLE:
+        if str(policy_status or "").startswith("blocked") and not evidence.fallback_reason:
             reasons.append("policy_blocked_without_fallback")
         if (
             evidence.fallback_reason
@@ -213,7 +213,7 @@ def sanitize_stage_summary(summary: dict[str, Any]) -> dict[str, Any]:
             safe[key] = _safe_float(value)
         elif key in _SAFE_BOOL_KEYS and isinstance(value, bool):
             safe[key] = value
-        elif key in {"workflow_id", "request_id"} and isinstance(value, str):
+        elif key in {"workflow_id", "request_id", "owner_id"} and isinstance(value, str):
             safe[key] = value
         elif key == "document_ids" and isinstance(value, (list, tuple)):
             safe[key] = [str(item) for item in value if str(item).strip()]
@@ -229,6 +229,16 @@ def summarize_workflow_status(stages: list[WorkflowStageResult]) -> WorkflowStat
         return WorkflowStatus.NEEDS_REVIEW
     if any((stage.output_summary or {}).get("fallback_reason") for stage in stages):
         return WorkflowStatus.COMPLETED_WITH_FALLBACK
+    if any(
+        stage.status
+        in {
+            WorkflowStageStatus.PENDING,
+            WorkflowStageStatus.RUNNING,
+            WorkflowStageStatus.SKIPPED,
+        }
+        for stage in stages
+    ):
+        return WorkflowStatus.PARTIAL
     if stages:
         return WorkflowStatus.COMPLETED
     return WorkflowStatus.PARTIAL
