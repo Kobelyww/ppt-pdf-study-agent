@@ -118,75 +118,110 @@ class StudyAgentRuntimeService:
             },
         )
 
-        evidence = self.evidence_source.load(
-            owner_id=request.authenticated_user_id,
-            document_ids=request.document_ids,
-        )
-        persisted_chunks = self.index_service.load_chunks(
-            owner_id=request.authenticated_user_id,
-            document_ids=request.document_ids,
-        )
-        requested_artifact_by_document_id = {
-            item.document_id: item.artifact_id for item in evidence
-        }
-        index_statuses = {
-            document_id: self.index_service.status(
+        try:
+            evidence = self.evidence_source.load(
                 owner_id=request.authenticated_user_id,
-                document_id=document_id,
-            ).to_dict()
-            for document_id in requested_artifact_by_document_id
-        }
-        requested_document_ids = set(requested_artifact_by_document_id)
-        persisted_chunks_by_document_id: dict[str, list[dict[str, Any]]] = {}
-        for chunk in persisted_chunks:
-            document_id = str(chunk.get("metadata", {}).get("document_id") or "")
-            if document_id:
-                persisted_chunks_by_document_id.setdefault(document_id, []).append(chunk)
-        persisted_document_ids = set(persisted_chunks_by_document_id)
-        stale_document_ids = {
-            document_id
-            for document_id, artifact_id in requested_artifact_by_document_id.items()
-            if document_id in persisted_chunks_by_document_id
-            and any(
-                str(chunk.get("metadata", {}).get("artifact_id")) != artifact_id
-                for chunk in persisted_chunks_by_document_id[document_id]
+                document_ids=request.document_ids,
             )
-        }
-        incomplete_document_ids = {
-            document_id
-            for document_id, artifact_id in requested_artifact_by_document_id.items()
-            if document_id in persisted_chunks_by_document_id
-            and document_id not in stale_document_ids
-            and not persisted_chunk_set_is_complete(
-                persisted_chunks_by_document_id[document_id],
-                document_id=document_id,
-                artifact_id=artifact_id,
+            persisted_chunks = self.index_service.load_chunks(
+                owner_id=request.authenticated_user_id,
+                document_ids=request.document_ids,
             )
-        }
-        if (
-            requested_document_ids
-            and requested_document_ids <= persisted_document_ids
-            and not stale_document_ids
-            and not incomplete_document_ids
-        ):
-            chunks = list(persisted_chunks)
-            chunk_source = "persisted"
-            fallback_reason = None
-        else:
-            chunks = self.chunker.chunk(evidence)
-            chunk_source = "fallback"
-            if not persisted_document_ids:
-                fallback_reason = "persisted_chunks_missing"
-            elif stale_document_ids:
-                fallback_reason = "persisted_chunks_stale"
+            requested_artifact_by_document_id = {
+                item.document_id: item.artifact_id for item in evidence
+            }
+            index_statuses = {
+                document_id: self.index_service.status(
+                    owner_id=request.authenticated_user_id,
+                    document_id=document_id,
+                ).to_dict()
+                for document_id in requested_artifact_by_document_id
+            }
+            requested_document_ids = set(requested_artifact_by_document_id)
+            persisted_chunks_by_document_id: dict[str, list[dict[str, Any]]] = {}
+            for chunk in persisted_chunks:
+                document_id = str(chunk.get("metadata", {}).get("document_id") or "")
+                if document_id:
+                    persisted_chunks_by_document_id.setdefault(document_id, []).append(chunk)
+            persisted_document_ids = set(persisted_chunks_by_document_id)
+            stale_document_ids = {
+                document_id
+                for document_id, artifact_id in requested_artifact_by_document_id.items()
+                if document_id in persisted_chunks_by_document_id
+                and any(
+                    str(chunk.get("metadata", {}).get("artifact_id")) != artifact_id
+                    for chunk in persisted_chunks_by_document_id[document_id]
+                )
+            }
+            incomplete_document_ids = {
+                document_id
+                for document_id, artifact_id in requested_artifact_by_document_id.items()
+                if document_id in persisted_chunks_by_document_id
+                and document_id not in stale_document_ids
+                and not persisted_chunk_set_is_complete(
+                    persisted_chunks_by_document_id[document_id],
+                    document_id=document_id,
+                    artifact_id=artifact_id,
+                )
+            }
+            if (
+                requested_document_ids
+                and requested_document_ids <= persisted_document_ids
+                and not stale_document_ids
+                and not incomplete_document_ids
+            ):
+                chunks = list(persisted_chunks)
+                chunk_source = "persisted"
+                fallback_reason = None
             else:
-                fallback_reason = "persisted_chunks_incomplete"
-        if not chunks:
-            raise StudyAgentDocumentError(
-                status_code=422,
-                code="document_evidence_missing",
-                detail="Processed document evidence is unavailable.",
+                chunks = self.chunker.chunk(evidence)
+                chunk_source = "fallback"
+                if not persisted_document_ids:
+                    fallback_reason = "persisted_chunks_missing"
+                elif stale_document_ids:
+                    fallback_reason = "persisted_chunks_stale"
+                else:
+                    fallback_reason = "persisted_chunks_incomplete"
+            if not chunks:
+                raise StudyAgentDocumentError(
+                    status_code=422,
+                    code="document_evidence_missing",
+                    detail="Processed document evidence is unavailable.",
+                )
+        except StudyAgentDocumentError as exc:
+            workflow_error_code = (
+                exc.code
+                if exc.code
+                in {
+                    "authentication_required",
+                    "document_evidence_missing",
+                    "forbidden_document",
+                    "bad_study_request",
+                }
+                else "document_evidence_missing"
             )
+            add_stage(
+                WorkflowStageName.RETRIEVE,
+                status=WorkflowStageStatus.FAILED,
+                error_code=workflow_error_code,
+            )
+            add_stage(
+                WorkflowStageName.TRACE,
+                output_summary={
+                    "latency_ms": round((perf_counter() - started_at) * 1000, 3),
+                    "stage_count": len(stages) + 1,
+                },
+            )
+            setattr(
+                exc,
+                "workflow",
+                build_workflow_payload(
+                    workflow_id=workflow_id,
+                    stages=stages,
+                    needs_review=False,
+                ),
+            )
+            raise
 
         router_decision = self.router.route(request.query, target=request.target.value)
         policy_decision = self.route_policy.decide(

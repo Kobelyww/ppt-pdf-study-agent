@@ -504,3 +504,16 @@ async def test_runtime_workflow_failure_for_missing_evidence_is_safe():
         )
 
     assert exc_info.value.status_code == 404
+    workflow = exc_info.value.workflow
+    assert workflow["status"] == "failed"
+    assert [stage["stage"] for stage in workflow["stages"]] == [
+        "intake",
+        "retrieve",
+        "trace",
+    ]
+    retrieve_stage = workflow["stages"][1]
+    assert retrieve_stage["status"] == "failed"
+    assert retrieve_stage["error_code"] == "document_evidence_missing"
+    serialized_workflow = str(workflow)
+    assert "What do derivatives measure" not in serialized_workflow
+    assert "missing-doc" not in serialized_workflow
