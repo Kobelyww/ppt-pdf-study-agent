@@ -677,6 +677,35 @@ def test_study_agent_query_unsupported_skill_version_maps_to_422(tmp_path: Path)
     assert "unsupported skill version" in response.json()["detail"]
 
 
+def test_study_agent_query_skill_error_omits_raw_requested_values(tmp_path: Path):
+    Session = _session_factory()
+    app = create_app(
+        session_factory=Session,
+        secret_key="test-secret",
+        allow_dev_user_header=False,
+    )
+    client = TestClient(app)
+    headers = _login(client)
+
+    response = client.post(
+        "/api/study-agent/query",
+        json={
+            "query": "What do derivatives measure?",
+            "target": "answer",
+            "document_ids": ["missing-doc"],
+            "skill_name": "concept_explanation",
+            "skill_version": "sk-secret-token",
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail == "unsupported skill version"
+    assert "sk-secret-token" not in detail
+    assert "Selected document is unavailable" not in detail
+
+
 def test_study_agent_query_audit_has_not_applied_policy_for_injected_orchestrator(
     tmp_path: Path,
 ):

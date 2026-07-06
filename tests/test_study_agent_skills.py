@@ -71,6 +71,21 @@ def test_unsupported_requested_version_raises_value_error():
         )
 
 
+def test_unsupported_requested_version_error_omits_raw_requested_values():
+    with pytest.raises(ValueError) as exc_info:
+        StudySkillRegistry().select_skill(
+            target=StudyTarget.ANSWER,
+            category="definition",
+            requested_skill="concept_explanation",
+            requested_version="sk-secret-token",
+        )
+
+    message = str(exc_info.value)
+    assert message == "unsupported skill version"
+    assert "sk-secret-token" not in message
+    assert "concept_explanation" not in message
+
+
 def test_requested_skill_that_does_not_support_target_raises_value_error():
     with pytest.raises(ValueError, match="does not support target"):
         StudySkillRegistry().select_skill(
@@ -79,6 +94,20 @@ def test_requested_skill_that_does_not_support_target_raises_value_error():
             requested_skill="concept_explanation",
             requested_version="v1",
         )
+
+
+def test_requested_skill_error_omits_raw_requested_skill_name():
+    with pytest.raises(ValueError) as exc_info:
+        StudySkillRegistry().select_skill(
+            target=StudyTarget.ANSWER,
+            category="definition",
+            requested_skill="sk-secret-token",
+            requested_version="v1",
+        )
+
+    message = str(exc_info.value)
+    assert message == "unsupported study skill"
+    assert "sk-secret-token" not in message
 
 
 def test_skill_to_safe_dict_returns_only_safe_labels_and_lists():

@@ -73,23 +73,21 @@ class StudySkillRegistry:
     ) -> StudySkill:
         candidates = [skill for skill in self._skills if skill.skill_name == requested_skill]
         if not candidates:
-            raise ValueError(f"unsupported study skill: {requested_skill}")
+            raise ValueError("unsupported study skill")
 
         version = requested_version or "v1"
         for skill in candidates:
             if skill.version == version:
                 if target not in skill.supported_targets:
-                    raise ValueError(
-                        f"study skill {requested_skill} does not support target {target.value}"
-                    )
+                    raise ValueError("study skill does not support target")
                 return skill
-        raise ValueError(f"unsupported skill version: {requested_skill} {version}")
+        raise ValueError("unsupported skill version")
 
     def _skill_for(self, skill_name: str, *, target: StudyTarget) -> StudySkill:
         for skill in self._skills:
             if skill.skill_name == skill_name and target in skill.supported_targets:
                 return skill
-        raise ValueError(f"study skill {skill_name} does not support target {target.value}")
+        raise ValueError("study skill does not support target")
 
 
 _DEFAULT_SKILLS = (

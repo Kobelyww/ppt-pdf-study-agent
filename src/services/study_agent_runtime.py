@@ -11,7 +11,7 @@ from src.services.rag_route_policy import (
     RAGRoutePolicyConfig,
     RAGRoutePolicyService,
 )
-from src.services.rag_router import RAGStrategyRouter
+from src.services.rag_router import RAGStrategyRouter, RetrievalMode
 from src.services.rag_service import RAGService
 from src.services.study_agent import (
     EvidenceCollector,
@@ -30,7 +30,7 @@ from src.services.study_agent_index import (
     StudyDocumentIndexService,
     persisted_chunk_set_is_complete,
 )
-from src.services.study_agent_skills import StudySkillRegistry
+from src.services.study_agent_skills import StudySkill, StudySkillRegistry
 from src.services.study_agent_workflow import (
     ReviewGate,
     WorkflowStageName,
@@ -119,6 +119,13 @@ class StudyAgentRuntimeService:
                 "target": request.target.value,
                 "estimated_cost": request.budget.value,
             },
+        )
+        router_decision = self.router.route(request.query, target=request.target.value)
+        skill = self.skill_registry.select_skill(
+            target=request.target,
+            category=router_decision.category.value,
+            requested_skill=request.skill_name,
+            requested_version=request.skill_version,
         )
 
         try:
@@ -226,7 +233,6 @@ class StudyAgentRuntimeService:
             )
             raise
 
-        router_decision = self.router.route(request.query, target=request.target.value)
         policy_decision = self.route_policy.decide(
             router_decision=router_decision,
             readiness=self.readiness_provider(),
@@ -234,10 +240,11 @@ class StudyAgentRuntimeService:
             budget=request.budget.value,
             preferred_mode=request.preferred_mode,
         )
+        selected_mode = self._skill_allowed_mode(policy_decision.selected_mode, skill)
         add_stage(
             WorkflowStageName.PLAN,
             output_summary={
-                "selected_mode": policy_decision.selected_mode.value,
+                "selected_mode": selected_mode.value,
                 "router_mode": policy_decision.router_mode.value,
                 "category": policy_decision.category,
                 "policy_status": policy_decision.status,
@@ -246,12 +253,7 @@ class StudyAgentRuntimeService:
             },
         )
         safe_policy = policy_decision.to_safe_dict()
-        skill = self.skill_registry.select_skill(
-            target=request.target,
-            category=policy_decision.category,
-            requested_skill=request.skill_name,
-            requested_version=request.skill_version,
-        )
+        safe_policy["selected_mode"] = selected_mode.value
         safe_skill = skill.to_safe_dict()
         add_stage(
             WorkflowStageName.SKILL_SELECT,
@@ -263,7 +265,7 @@ class StudyAgentRuntimeService:
         )
         orchestrator_payload = {
             **payload,
-            "preferred_mode": policy_decision.selected_mode.value,
+            "preferred_mode": selected_mode.value,
             "policy_decision": safe_policy,
             "skill": safe_skill,
         }
@@ -369,3 +371,10 @@ class StudyAgentRuntimeService:
         if self.graph_factory is not None:
             return self.graph_factory(evidence)
         return self.graph
+
+    def _skill_allowed_mode(self, mode: RetrievalMode, skill: StudySkill) -> RetrievalMode:
+        if mode in skill.allowed_retrieval_modes:
+            return mode
+        if RetrievalMode.SIMPLE in skill.allowed_retrieval_modes:
+            return RetrievalMode.SIMPLE
+        return skill.allowed_retrieval_modes[0]

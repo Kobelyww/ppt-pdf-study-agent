@@ -498,6 +498,29 @@ async def test_runtime_rejects_unsupported_requested_skill_version():
 
 
 @pytest.mark.asyncio
+async def test_runtime_validates_requested_skill_before_document_access():
+    Session = _session_factory()
+    runtime = StudyAgentRuntimeService(session_factory=Session)
+
+    with pytest.raises(ValueError) as exc_info:
+        await runtime.run(
+            {
+                "query": "What do derivatives measure?",
+                "target": "answer",
+                "document_ids": ["missing-doc"],
+                "skill_name": "concept_explanation",
+                "skill_version": "sk-secret-token",
+                "authenticated_user_id": "user-1",
+                "request_id": "req-runtime-skill-before-doc",
+            }
+        )
+
+    assert str(exc_info.value) == "unsupported skill version"
+    assert "sk-secret-token" not in str(exc_info.value)
+    assert not hasattr(exc_info.value, "workflow")
+
+
+@pytest.mark.asyncio
 async def test_runtime_rejects_requested_skill_that_does_not_support_target():
     Session = _session_factory()
     _insert_ready_document_with_artifact(Session)
@@ -518,6 +541,59 @@ async def test_runtime_rejects_requested_skill_that_does_not_support_target():
                 "request_id": "req-runtime-skill-target",
             }
         )
+
+
+@pytest.mark.asyncio
+async def test_runtime_falls_back_when_selected_mode_is_not_allowed_by_requested_skill():
+    Session = _session_factory()
+    _insert_ready_document_with_artifact(
+        Session,
+        content="Derivatives measure rates and integrals accumulate signed area.",
+    )
+    _insert_persisted_chunk(
+        Session,
+        content="Derivatives measure rates and integrals accumulate signed area.",
+    )
+    runtime = StudyAgentRuntimeService(
+        session_factory=Session,
+        route_policy=RAGRoutePolicyService(
+            RAGRoutePolicyConfig(
+                advanced_routing_enabled=True,
+                agentic_rag_enabled=True,
+                allow_user_preferred_mode=True,
+                require_persisted_chunks_for_advanced=False,
+                max_budget_for_agentic="balanced",
+            )
+        ),
+        readiness_provider=lambda: RAGReadinessSnapshot(
+            policy_version="rag-policy-v1",
+            fixture_version="test-fixture",
+            modes={"agentic_rag": {"overall": "candidate"}},
+        ),
+    )
+
+    result = await runtime.run(
+        {
+            "query": "Analyze derivatives and integrals.",
+            "target": "answer",
+            "document_ids": ["doc-study"],
+            "preferred_mode": "agentic_rag",
+            "skill_name": "concept_explanation",
+            "skill_version": "v1",
+            "authenticated_user_id": "user-1",
+            "request_id": "req-runtime-skill-mode-fallback",
+        }
+    )
+
+    assert result.plan.mode == RetrievalMode.SIMPLE
+    assert result.evidence.mode == RetrievalMode.SIMPLE
+    assert result.audit_metadata["policy"]["selected_mode"] == "simple_rag"
+    skill_stage = next(
+        stage
+        for stage in result.audit_metadata["workflow"]["stages"]
+        if stage["stage"] == "skill_select"
+    )
+    assert skill_stage["output_summary"]["skill_name"] == "concept_explanation"
 
 
 @pytest.mark.asyncio
