@@ -270,6 +270,54 @@ def test_mvp7_product_records_create_and_preserve_metadata_columns(tmp_path):
         assert audit.event_metadata == {"filename": "Lecture Notes.pdf"}
 
 
+def test_review_task_record_accepts_safe_metadata(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'review_tasks.db'}")
+    Base.metadata.create_all(engine)
+    SessionFactory = create_session_factory(engine)
+
+    safe_metadata = {
+        "workflow_id": "workflow-1",
+        "trace_id": "trace-1",
+        "selected_mode": "hybrid",
+        "review_reasons": ["low_confidence", "citation_gap"],
+        "confidence": 0.61,
+        "source_count": 5,
+        "chunk_count": 7,
+        "citation_count": 3,
+        "issue_count": 2,
+    }
+
+    with SessionFactory() as session:
+        session.add(
+            ReviewTaskRecord(
+                id="review-safe-metadata-1",
+                owner_id="user-1",
+                target_type="answer",
+                target_id="answer-1",
+                status="open",
+                reason="low_confidence",
+                task_metadata=safe_metadata,
+            )
+        )
+        session.commit()
+
+    with Session(engine) as session:
+        review = session.get(ReviewTaskRecord, "review-safe-metadata-1")
+
+        assert review is not None
+        assert review.task_metadata == safe_metadata
+        assert review.task_metadata["workflow_id"] == "workflow-1"
+        assert review.task_metadata["trace_id"] == "trace-1"
+        assert review.task_metadata["selected_mode"] == "hybrid"
+        assert review.task_metadata["review_reasons"] == ["low_confidence", "citation_gap"]
+        assert review.task_metadata["confidence"] == 0.61
+        assert review.task_metadata["source_count"] == 5
+        assert review.task_metadata["chunk_count"] == 7
+        assert review.task_metadata["citation_count"] == 3
+        assert review.task_metadata["issue_count"] == 2
+        assert "raw_query" not in review.task_metadata
+
+
 def test_rag_quality_observability_records_create_and_preserve_safe_metadata(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'rag_quality.db'}")
     Base.metadata.create_all(engine)

@@ -310,6 +310,15 @@ class FeedbackRecord(Base):
 
 class ReviewTaskRecord(Base):
     __tablename__ = "review_tasks"
+    __table_args__ = (
+        Index(
+            "ix_review_tasks_owner_target_status",
+            "owner_id",
+            "target_type",
+            "target_id",
+            "status",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -320,6 +329,7 @@ class ReviewTaskRecord(Base):
     assignee: Mapped[Optional[str]] = mapped_column(String(255))
     decision: Mapped[Optional[str]] = mapped_column(String(64))
     comment: Mapped[Optional[str]] = mapped_column(Text)
+    task_metadata: Mapped[dict] = mapped_column("metadata", JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )

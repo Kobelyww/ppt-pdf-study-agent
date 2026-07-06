@@ -90,6 +90,9 @@ def test_alembic_upgrade_creates_orm_compatible_sqlite_schema(tmp_path, monkeypa
     artifact_columns = {column["name"] for column in inspector.get_columns("document_artifacts")}
     audit_event_columns = {column["name"] for column in inspector.get_columns("audit_events")}
     chunk_columns = {column["name"]: column for column in inspector.get_columns("document_chunks")}
+    review_task_columns = {
+        column["name"] for column in inspector.get_columns("review_tasks")
+    }
     trace_columns = {
         column["name"] for column in inspector.get_columns("study_agent_traces")
     }
@@ -106,6 +109,9 @@ def test_alembic_upgrade_creates_orm_compatible_sqlite_schema(tmp_path, monkeypa
     assert {"document_id", "metadata"}.issubset(content_version_columns)
     assert {"document_id", "metadata"}.issubset(artifact_columns)
     assert {"actor_id", "metadata"}.issubset(audit_event_columns)
+    assert {"owner_id", "target_type", "target_id", "status", "metadata"}.issubset(
+        review_task_columns
+    )
     assert {
         "id",
         "owner_id",
@@ -177,6 +183,7 @@ def test_alembic_upgrade_creates_orm_compatible_sqlite_schema(tmp_path, monkeypa
         "error_code",
     }.issubset(eval_score_columns)
     trace_indexes = {index["name"] for index in inspector.get_indexes("study_agent_traces")}
+    review_task_indexes = {index["name"] for index in inspector.get_indexes("review_tasks")}
     eval_run_indexes = {index["name"] for index in inspector.get_indexes("rag_evaluation_runs")}
     eval_score_indexes = {
         index["name"] for index in inspector.get_indexes("rag_evaluation_case_scores")
@@ -188,6 +195,7 @@ def test_alembic_upgrade_creates_orm_compatible_sqlite_schema(tmp_path, monkeypa
         "ix_study_agent_traces_owner_mode_created",
         "ix_study_agent_traces_review_created",
     }.issubset(trace_indexes)
+    assert "ix_review_tasks_owner_target_status" in review_task_indexes
     assert {
         "ix_rag_eval_runs_created_by_created",
         "ix_rag_eval_runs_status_created",
