@@ -276,7 +276,7 @@ def test_review_task_record_accepts_safe_metadata(tmp_path):
     SessionFactory = create_session_factory(engine)
 
     safe_metadata = {
-        "workflow_id": "workflow-1",
+        "workflow_id": "workflow-0123456789abcdef0123456789abcdef",
         "trace_id": "trace-1",
         "selected_mode": "hybrid",
         "review_reasons": ["low_confidence", "citation_gap"],
@@ -292,8 +292,8 @@ def test_review_task_record_accepts_safe_metadata(tmp_path):
             ReviewTaskRecord(
                 id="review-safe-metadata-1",
                 owner_id="user-1",
-                target_type="answer",
-                target_id="answer-1",
+                target_type="study_agent_workflow",
+                target_id="workflow-0123456789abcdef0123456789abcdef",
                 status="open",
                 reason="low_confidence",
                 task_metadata=safe_metadata,
@@ -306,7 +306,10 @@ def test_review_task_record_accepts_safe_metadata(tmp_path):
 
         assert review is not None
         assert review.task_metadata == safe_metadata
-        assert review.task_metadata["workflow_id"] == "workflow-1"
+        assert (
+            review.task_metadata["workflow_id"]
+            == "workflow-0123456789abcdef0123456789abcdef"
+        )
         assert review.task_metadata["trace_id"] == "trace-1"
         assert review.task_metadata["selected_mode"] == "hybrid"
         assert review.task_metadata["review_reasons"] == ["low_confidence", "citation_gap"]
