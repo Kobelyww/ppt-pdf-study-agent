@@ -2,6 +2,7 @@ import pytest
 from unittest.mock import AsyncMock
 
 from src.agents.base_agent import AgentResult
+from src.agents.document_parsing import DocumentParsingAgent
 from src.coordinator.main_coordinator import MainCoordinator, CoordinatorState
 
 
@@ -160,6 +161,65 @@ async def test_coordinator_fails_for_unregistered_stage():
     assert result["status"] == "failed"
     assert result["data"]["failed_stage"] == "document_parsing"
     assert coordinator.state.status.value == "failed"
+
+
+@pytest.mark.asyncio
+async def test_coordinator_missing_pdf_failure_uses_safe_stage_data():
+    """测试缺失PDF的失败响应只暴露安全阶段元数据"""
+    coordinator = MainCoordinator()
+    coordinator.register_sub_coordinator("document_parsing", DocumentParsingAgent())
+
+    result = await coordinator.invoke(
+        {
+            "pdf_path": "/private/raw-course-notes.pdf",
+            "query": "raw private study question",
+        }
+    )
+
+    assert result["status"] == "failed"
+    assert result["data"]["failed_stage"] == "document_parsing"
+    assert result["data"]["completed_stages"] == []
+    serialized = str(result).lower()
+    assert "raw private study question" not in serialized
+    assert "raw-course-notes" not in serialized
+
+
+@pytest.mark.asyncio
+async def test_coordinator_failure_response_filters_unsafe_stage_data():
+    """测试阶段失败响应过滤子协调器返回的原始请求数据"""
+    coordinator = MainCoordinator()
+
+    document_parsing = AsyncMock()
+    document_parsing.invoke.return_value = AgentResult(
+        success=False,
+        data={
+            "request": {
+                "pdf_path": "/private/raw-course-notes.pdf",
+                "query": "raw private study question",
+            },
+            "pdf_path": "/private/raw-course-notes.pdf",
+            "error_code": "missing_pdf",
+            "source_count": 0,
+        },
+        message="Missing file /private/raw-course-notes.pdf",
+    )
+    coordinator.register_sub_coordinator("document_parsing", document_parsing)
+
+    result = await coordinator.invoke(
+        {
+            "pdf_path": "/private/raw-course-notes.pdf",
+            "query": "raw private study question",
+        }
+    )
+
+    assert result["status"] == "failed"
+    assert result["data"]["stage_data"] == {
+        "error_code": "missing_pdf",
+        "source_count": 0,
+    }
+    serialized = str(result).lower()
+    assert "raw private study question" not in serialized
+    assert "raw-course-notes" not in serialized
 
 
 @pytest.mark.asyncio

@@ -21,6 +21,8 @@ class AgentResult:
     data: Dict[str, Any] = field(default_factory=dict)
     message: str = ""
     status: AgentStatus = AgentStatus.COMPLETED
+    error_code: str | None = None
+    trace_metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 class BaseAgent(ABC):
@@ -47,7 +49,12 @@ class BaseAgent(ABC):
         while self.retry_count <= self.max_retries:
             try:
                 result = await self.process(input_data)
-                self.status = AgentStatus.COMPLETED
+                if result.success:
+                    self.status = AgentStatus.COMPLETED
+                    result.status = AgentStatus.COMPLETED
+                else:
+                    self.status = AgentStatus.FAILED
+                    result.status = AgentStatus.FAILED
                 return result
             except Exception as e:
                 self.retry_count += 1
@@ -58,9 +65,18 @@ class BaseAgent(ABC):
                         data={},
                         message=f"处理失败 (重试{self.max_retries}次后): {str(e)}",
                         status=AgentStatus.FAILED,
+                        error_code="agent_retry_exhausted",
+                        trace_metadata={"retry_count": self.retry_count},
                     )
 
-        return AgentResult(success=False, data={}, message="未知错误", status=AgentStatus.FAILED)
+        return AgentResult(
+            success=False,
+            data={},
+            message="未知错误",
+            status=AgentStatus.FAILED,
+            error_code="agent_unknown_error",
+            trace_metadata={"retry_count": self.retry_count},
+        )
 
     def reset(self):
         """重置智能体状态"""

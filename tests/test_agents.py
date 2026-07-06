@@ -74,6 +74,29 @@ async def test_invoke_success():
 
 
 @pytest.mark.asyncio
+async def test_base_agent_marks_failed_result_as_failed():
+    class SoftFailAgent(BaseAgent):
+        role = "soft-fail"
+        system_prompt = "test"
+
+        async def process(self, input_data):
+            return AgentResult(
+                success=False,
+                data={"safe": True},
+                message="soft failure",
+                error_code="soft_failure",
+            )
+
+    agent = SoftFailAgent()
+    result = await agent.invoke({})
+
+    assert result.success is False
+    assert result.error_code == "soft_failure"
+    assert result.status == AgentStatus.FAILED
+    assert agent.status == AgentStatus.FAILED
+
+
+@pytest.mark.asyncio
 async def test_invoke_status_transitions():
     """测试invoke状态转换"""
     agent = MockAgent()
@@ -122,6 +145,8 @@ async def test_invoke_exhausted_retries():
 
     assert result.success is False
     assert result.status == AgentStatus.FAILED
+    assert result.error_code == "agent_retry_exhausted"
+    assert result.trace_metadata == {"retry_count": 4}
     assert "重试3次后" in result.message
     assert agent.retry_count == 4
 

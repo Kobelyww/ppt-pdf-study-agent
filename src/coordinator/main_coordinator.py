@@ -218,10 +218,10 @@ class MainCoordinator:
             "success": False,
             "response": {
                 "status": "failed",
-                "message": message,
+                "message": self._safe_failure_message(stage, message),
                 "data": {
                     "failed_stage": stage,
-                    "stage_data": data or {},
+                    "stage_data": self._safe_stage_data(data or {}),
                     "completed_stages": self.state.completed_stages.copy(),
                 },
             },
@@ -235,3 +235,36 @@ class MainCoordinator:
             "status": self.state.status.value,
             "errors": len(self.state.errors),
         }
+
+    def _safe_failure_message(self, stage: str, message: str) -> str:
+        """返回产品可见的安全失败信息，避免回显路径或原始请求内容"""
+        if stage == "document_parsing":
+            return "文档解析失败"
+        if stage == "request_validation":
+            return message
+        return f"阶段失败: {stage}"
+
+    def _safe_stage_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """过滤产品响应中的阶段数据，只保留安全结构化诊断字段"""
+        safe: Dict[str, Any] = {}
+        safe_string_keys = {"error_code", "reason", "status"}
+        safe_int_keys = {
+            "source_count",
+            "chunk_count",
+            "concept_count",
+            "question_count",
+            "section_count",
+            "table_count",
+            "figure_count",
+            "formula_count",
+        }
+        safe_bool_keys = {"needs_review", "fallback_used"}
+
+        for key, value in data.items():
+            if key in safe_string_keys and isinstance(value, str):
+                safe[key] = value[:128]
+            elif key in safe_int_keys and isinstance(value, int) and value >= 0:
+                safe[key] = value
+            elif key in safe_bool_keys and isinstance(value, bool):
+                safe[key] = value
+        return safe
