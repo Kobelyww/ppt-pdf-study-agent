@@ -179,6 +179,40 @@ def test_ensure_for_workflow_reuses_open_task_for_same_owner_and_workflow():
     assert len(records) == 1
 
 
+def test_ensure_for_workflow_reuses_decided_task_for_same_owner_and_workflow():
+    Session = _session_factory()
+    service = StudyAgentReviewTaskService(Session)
+
+    first = service.ensure_for_workflow(
+        owner_id="owner-1",
+        request_id="req-1",
+        workflow=_workflow(),
+        trace_payload={"trace_id": "trace-1"},
+        result_audit_metadata={},
+    )
+    assert first is not None
+    with Session() as session:
+        record = session.get(ReviewTaskRecord, first["id"])
+        record.status = "decided"
+        record.decision = "approved"
+        session.commit()
+
+    second = service.ensure_for_workflow(
+        owner_id="owner-1",
+        request_id="req-2",
+        workflow=_workflow(),
+        trace_payload={"trace_id": "trace-2"},
+        result_audit_metadata={},
+    )
+
+    assert second is not None
+    assert second["id"] == first["id"]
+    assert second["status"] == "decided"
+    with Session() as session:
+        records = session.query(ReviewTaskRecord).all()
+    assert len(records) == 1
+
+
 def test_ensure_for_workflow_is_owner_scoped_for_same_workflow_id():
     Session = _session_factory()
     service = StudyAgentReviewTaskService(Session)

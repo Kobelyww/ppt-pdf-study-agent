@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Mapping
 from typing import Any
 from uuid import uuid4
 
@@ -116,6 +117,40 @@ def safe_review_task_metadata(
     return metadata
 
 
+def sanitize_review_task_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(metadata, Mapping):
+        return {}
+
+    safe: dict[str, Any] = {}
+    workflow_id = _safe_id(metadata.get("workflow_id"))
+    if workflow_id is not None:
+        safe["workflow_id"] = workflow_id
+
+    trace_id = _safe_id(metadata.get("trace_id"))
+    if trace_id is not None:
+        safe["trace_id"] = trace_id
+
+    selected_mode = _safe_mode(metadata.get("selected_mode"))
+    if selected_mode is not None:
+        safe["selected_mode"] = selected_mode
+
+    reasons = metadata.get("review_reasons")
+    if isinstance(reasons, (list, tuple)):
+        safe_reasons: list[str] = []
+        for reason in reasons:
+            _append_reason(safe_reasons, reason)
+        if safe_reasons:
+            safe["review_reasons"] = safe_reasons
+
+    for key in _SAFE_METRIC_KEYS:
+        if key in metadata:
+            safe[key] = _safe_float(metadata[key])
+    for key in _SAFE_COUNT_KEYS:
+        if key in metadata:
+            safe[key] = _safe_int(metadata[key])
+    return safe
+
+
 class StudyAgentReviewTaskService:
     def __init__(self, session_factory: Any) -> None:
         self.session_factory = session_factory
@@ -150,7 +185,6 @@ class StudyAgentReviewTaskService:
                     ReviewTaskRecord.owner_id == owner_id,
                     ReviewTaskRecord.target_type == TARGET_TYPE,
                     ReviewTaskRecord.target_id == workflow_id,
-                    ReviewTaskRecord.status == OPEN_STATUS,
                 )
             ).scalars().first()
             if existing is not None:
@@ -183,7 +217,7 @@ class StudyAgentReviewTaskService:
 
 
 def _review_task_summary(record: ReviewTaskRecord) -> dict[str, Any]:
-    metadata = record.task_metadata or {}
+    metadata = sanitize_review_task_metadata(record.task_metadata)
     return {
         "id": record.id,
         "target_type": record.target_type,

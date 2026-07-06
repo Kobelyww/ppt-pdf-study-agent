@@ -7,6 +7,7 @@ from src.api.request_context import get_user_context
 from src.db.models import ReviewTaskRecord, utc_now
 from src.security.audit import record_audit_event
 from src.security.permissions import Actor, can_view_review_task
+from src.services.study_agent_review_tasks import sanitize_review_task_metadata
 
 
 router = APIRouter(prefix="/api/review-tasks", tags=["review"])
@@ -114,7 +115,7 @@ def _audit_session_factory(request: Request):
 
 
 def _review_task_payload(record: ReviewTaskRecord) -> dict:
-    metadata = record.task_metadata or {}
+    metadata = sanitize_review_task_metadata(record.task_metadata)
     return {
         "id": record.id,
         "owner_id": record.owner_id,

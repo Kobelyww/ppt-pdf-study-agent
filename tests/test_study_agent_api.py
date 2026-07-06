@@ -847,6 +847,66 @@ def test_review_tasks_list_includes_safe_metadata_and_remains_owner_scoped(
     assert "导数原文" not in owner_list.text
 
 
+def test_review_tasks_list_sanitizes_persisted_task_metadata(tmp_path: Path):
+    client, _orchestrator, Session, _document_service = _client(tmp_path)
+    headers = _login(client)
+    with Session() as session:
+        session.add(
+            ReviewTaskRecord(
+                id="review-unsafe-metadata",
+                owner_id="user-1",
+                target_type="study_agent_workflow",
+                target_id="workflow-unsafe-list",
+                status="open",
+                reason="low_confidence",
+                task_metadata={
+                    "workflow_id": "workflow-unsafe-list",
+                    "trace_id": "trace-safe-list",
+                    "selected_mode": "simple_rag",
+                    "review_reasons": ["low_confidence", "custom_lowercase_reason"],
+                    "source_count": 2,
+                    "chunk_count": 4,
+                    "query": "什么是导数？",
+                    "content": "导数原文",
+                    "prompt": "hidden prompt",
+                    "token": "sk-secret-token",
+                    "nested": {"content": "raw nested content"},
+                },
+            )
+        )
+        session.commit()
+
+    response = client.get("/api/review-tasks", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 1
+    metadata = payload[0]["metadata"]
+    assert metadata == {
+        "workflow_id": "workflow-unsafe-list",
+        "trace_id": "trace-safe-list",
+        "selected_mode": "simple_rag",
+        "review_reasons": ["low_confidence"],
+        "source_count": 2,
+        "chunk_count": 4,
+    }
+    assert payload[0]["task_metadata"] == metadata
+    serialized = json.dumps(payload, ensure_ascii=False)
+    for forbidden in [
+        "什么是导数",
+        "导数原文",
+        "hidden prompt",
+        "sk-secret-token",
+        "query",
+        "content",
+        "prompt",
+        "token",
+        "nested",
+        "custom_lowercase_reason",
+    ]:
+        assert forbidden not in serialized
+
+
 def test_study_agent_workflow_detail_is_owner_scoped(tmp_path: Path):
     workflow_id = new_workflow_id()
     Session = _session_factory()
