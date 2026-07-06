@@ -4,16 +4,22 @@ import json
 import pytest
 from sqlalchemy import create_engine
 
-from src.db import Base, create_session_factory
+from src.db import Base, StudyAgentMemoryRecord, create_session_factory
 from src.services.study_agent_memory import StudyAgentMemoryService
 
 
 @pytest.fixture()
-def memory_service(tmp_path):
+def memory_context(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'memory.db'}")
     Base.metadata.create_all(engine)
     Session = create_session_factory(engine)
-    return StudyAgentMemoryService(Session)
+    return StudyAgentMemoryService(Session), Session
+
+
+@pytest.fixture()
+def memory_service(memory_context):
+    service, _Session = memory_context
+    return service
 
 
 def test_memory_store_and_recall_is_owner_scoped(memory_service):
@@ -50,6 +56,99 @@ def test_memory_rejects_raw_content_like_values(memory_service):
     assert "raw private query" not in encoded_summary
     assert "raw chunk text" not in encoded_summary
     assert "sk-secret" not in encoded_summary
+
+
+def test_review_outcome_rejects_empty_or_unknown_reasons(memory_service):
+    for reasons in ([], ["raw_private_reason"]):
+        with pytest.raises(ValueError, match="requires at least one safe reason"):
+            memory_service.store_review_outcome(
+                owner_id="owner-1",
+                workflow_id="workflow-1",
+                review_task_id="review-1",
+                reasons=reasons,
+                decision="accepted",
+                metadata={"confidence": 0.2},
+            )
+
+    assert memory_service.summary("owner-1")["memory_record_count"] == 0
+
+
+def test_memory_rejects_private_looking_ids_before_persisting(memory_context):
+    service, Session = memory_context
+
+    with pytest.raises(ValueError):
+        service.store_preference(
+            "owner-1",
+            "answer_style",
+            "concise",
+            "raw private query with spaces",
+        )
+
+    with pytest.raises(ValueError):
+        service.store_review_outcome(
+            owner_id="owner-1",
+            workflow_id="workflow raw private query",
+            review_task_id="review-1",
+            reasons=["low_confidence"],
+            decision="accepted",
+            metadata={"confidence": 0.2},
+        )
+
+    with pytest.raises(ValueError):
+        service.store_review_outcome(
+            owner_id="owner-1",
+            workflow_id="workflow-1",
+            review_task_id="r" * 129,
+            reasons=["low_confidence"],
+            decision="accepted",
+            metadata={"confidence": 0.2},
+        )
+
+    with Session() as session:
+        assert session.query(StudyAgentMemoryRecord).count() == 0
+
+
+def test_review_outcome_persisted_value_json_excludes_raw_metadata(memory_context):
+    service, Session = memory_context
+
+    memory_id = service.store_review_outcome(
+        owner_id="owner-1",
+        workflow_id="workflow-1",
+        review_task_id="review-1",
+        reasons=["low_confidence"],
+        decision="accepted",
+        metadata={
+            "query": "raw private query",
+            "chunk_content": "raw chunk text",
+            "token": "sk-secret",
+            "source_snippet": "raw source snippet",
+            "nested": {"prompt": "raw hidden prompt"},
+            "confidence": 0.2,
+            "source_count": 3,
+            "chunk_count": 4,
+        },
+    )
+
+    with Session() as session:
+        record = session.get(StudyAgentMemoryRecord, memory_id)
+
+    encoded_value = json.dumps(record.value_json, sort_keys=True)
+    assert record.value_json == {
+        "decision": "accepted",
+        "reasons": ["low_confidence"],
+        "metrics": {"chunk_count": 4, "confidence": 0.2, "source_count": 3},
+    }
+    assert "query" not in encoded_value
+    assert "chunk_content" not in encoded_value
+    assert "token" not in encoded_value
+    assert "source_snippet" not in encoded_value
+    assert "nested" not in encoded_value
+    assert "prompt" not in encoded_value
+    assert "raw private query" not in encoded_value
+    assert "raw chunk text" not in encoded_value
+    assert "sk-secret" not in encoded_value
+    assert "raw source snippet" not in encoded_value
+    assert "raw hidden prompt" not in encoded_value
 
 
 def test_expired_memory_is_not_recalled(memory_service):

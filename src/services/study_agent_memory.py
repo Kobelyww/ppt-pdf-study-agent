@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import re
 from typing import Any
 from uuid import uuid4
 
@@ -28,6 +29,7 @@ SAFE_REVIEW_REASONS = {
 
 SAFE_REVIEW_DECISIONS = {"accepted", "rejected", "needs_revision", "resolved"}
 SAFE_REVIEW_METRICS = {"confidence", "source_count", "chunk_count"}
+SAFE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_:\.-]{1,128}$")
 
 
 class StudyAgentMemoryService:
@@ -44,6 +46,7 @@ class StudyAgentMemoryService:
     ) -> str:
         if key not in SAFE_PREFERENCES or value not in SAFE_PREFERENCES[key]:
             raise ValueError("unsupported preference key or value")
+        self._validate_safe_id("source_id", source_id)
 
         memory_id = f"memory-{uuid4().hex}"
         with self.session_factory() as session:
@@ -75,6 +78,13 @@ class StudyAgentMemoryService:
         decision: str,
         metadata: dict[str, Any] | None = None,
     ) -> str:
+        self._validate_safe_id("workflow_id", workflow_id)
+        self._validate_safe_id("review_task_id", review_task_id)
+
+        safe_reasons = [reason for reason in reasons if reason in SAFE_REVIEW_REASONS]
+        if not safe_reasons:
+            raise ValueError("review outcome requires at least one safe reason")
+
         unsafe_reasons = [reason for reason in reasons if reason not in SAFE_REVIEW_REASONS]
         if unsafe_reasons:
             raise ValueError("unsupported review reason")
@@ -95,7 +105,7 @@ class StudyAgentMemoryService:
                     key=review_task_id,
                     value_json={
                         "decision": safe_decision,
-                        "reasons": list(reasons),
+                        "reasons": safe_reasons,
                         "metrics": safe_metrics,
                     },
                     confidence=float(confidence),
@@ -161,6 +171,11 @@ class StudyAgentMemoryService:
             if isinstance(value, (int, float)):
                 safe_metrics[key] = value
         return dict(sorted(safe_metrics.items()))
+
+    @staticmethod
+    def _validate_safe_id(field_name: str, value: str) -> None:
+        if not isinstance(value, str) or SAFE_ID_PATTERN.fullmatch(value) is None:
+            raise ValueError(f"invalid {field_name}")
 
     @staticmethod
     def _is_expired(expires_at: datetime | None) -> bool:
