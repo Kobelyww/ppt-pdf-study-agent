@@ -7,7 +7,7 @@
 - **多智能体协作**：8个专业智能体分工协作
 - **Agentic RAG**：混合检索方案，支持知识点问答解释
 - **记忆系统**：短期、长期、工作记忆三层架构
-- **自进化系统**：基于DSPy + GEPA的反射式进化优化
+- **自进化实验预留**：DSPy + GEPA 等反射式优化保留为后续实验能力
 - **多模态支持**：图表理解、公式识别、表格提取
 - **正式产品基础**：支持登录鉴权、owner隔离、审计查询、PostgreSQL/Redis/S3生产后端、Docker Compose和CI验证。
 
@@ -22,6 +22,8 @@ Study Agent queries now require explicit `document_ids` and prefer persisted chu
 Study Agent queries also create safe trace summaries for product observability. Trace metadata records route, index fallback, confidence, recall, latency, and review status without storing raw private query text, generated answers, chunk content, or source snippets.
 
 Study Agent workflow supervision now exposes a safe stage timeline for intake, planning, retrieval, generation, verification, review gate, and trace. Workflow diagnostics are compact and privacy-safe: they include status, counts, mode/category labels, fallback and review reason codes, but not raw queries, generated answers, chunks, prompts, hidden reasoning, or secrets.
+
+Study Agent collaboration now links review-gated outputs to persisted review tasks, records owner-scoped safe memory summaries, and labels bounded study skills by version. These additions keep the deterministic supervisor as the product mainline and do not introduce open-ended autonomous agent loops or raw conversation memory.
 
 RAG route policy P2 is now represented in deterministic evaluation fixtures and reports. The fixture set covers direct lookup, definition, concept relation, learning path, multi-document synthesis, question generation, and outline fragment cases; evaluation reports include privacy-safe policy status and category summaries without raw query, answer, chunk, prompt, or source snippet text.
 
@@ -121,7 +123,7 @@ newtest/
 - **PDF解析**：Marker
 - **RAG**：LangChain + ChromaDB
 - **知识图谱**：NetworkX
-- **自进化**：DSPy + GEPA
+- **自进化实验**：DSPy + GEPA（后续优化方向）
 - **Web框架**：FastAPI
 - **前端**：Vite + React
 

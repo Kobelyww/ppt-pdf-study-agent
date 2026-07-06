@@ -11,6 +11,7 @@ MVP-9 的目标是在 MVP-8 正式产品底座之上补齐可追踪的 agent 学
 - RAG quality observability: Study Agent query traces, index health summaries, deterministic RAG evaluation reports, and route readiness gates are available for the current Phase 3 product slice before changing Graph RAG or Agentic RAG routing thresholds.
 - Route policy P2 status: evaluation fixtures now encode expected category, router mode, selected mode under ready/not-ready index states, persisted chunk requirements, max allowed cost, and policy notes. Generated evaluation reports expose only aggregate policy status/category/mode counts so admin diagnostics do not include raw query text, answers, chunk content, prompts, source snippets, hidden reasoning, tokens, passwords, or secrets.
 - Agent workflow supervisor: implemented as a deterministic stage supervisor over the Study Agent runtime. It exposes safe workflow status and stage timelines while keeping multi-agent roles as service boundaries before any open-ended autonomous agent behavior.
+- Agent collaboration productization: Review Gate outcomes can create idempotent review tasks, safe owner-scoped memory summaries support preferences and review outcomes, and Study Agent skills are versioned as product capabilities before any prompt evolution or autonomous loop.
 - Legacy agent boundary: `MainCoordinator` and `BaseAgent` remain available for batch and specialist-agent tests, but the product Study Agent workflow is the main user-facing path. Legacy failed results must not be reported as completed agent status.
 
 ## 0.1 历史状态：MVP-8 正式产品基础
@@ -61,14 +62,14 @@ MVP-9 的目标是在 MVP-8 正式产品底座之上补齐可追踪的 agent 学
 ## 1. 项目概述
 
 ### 1.1 项目目标
-构建一个基于DeepAgent的智能系统，能够将PPT/PDF文件转化为复习提纲和考试例题，支持理工科内容，具备Agentic RAG系统、记忆系统和自进化系统。使用MiMo V2.5作为基座大模型，支持多模态解析。
+构建一个基于DeepAgent的智能系统，能够将PPT/PDF文件转化为复习提纲和考试例题，支持理工科内容，具备Agentic RAG系统和记忆系统，并为后续自进化实验预留边界。使用MiMo V2.5作为基座大模型，支持多模态解析。
 
 ### 1.2 核心特性
 - **多智能体协作**：6个专业智能体分工协作
 - **层级协调器架构**：主协调器管理子协调器
 - **Agentic RAG系统**：支持理工科公式和图表的检索增强生成
 - **记忆系统**：短期、长期、工作记忆三层架构
-- **自进化系统**：Hermes 7步进化管道
+- **自进化实验预留**：Hermes 7步进化管道保留为后续实验能力
 - **Human-in-Loop**：混合评估模式
 - **结构化输出**：支持Markdown、LaTeX、JSON格式
 - **MCP服务集成**：按需集成各种服务
