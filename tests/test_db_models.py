@@ -18,6 +18,7 @@ from src.db import (
     RAGEvaluationCaseScoreRecord,
     RAGEvaluationRunRecord,
     ReviewTaskRecord,
+    StudyAgentMemoryRecord,
     StudyAgentTraceRecord,
     ContentVersionRecord,
     create_session_factory,
@@ -414,3 +415,52 @@ def test_rag_quality_observability_records_create_and_preserve_safe_metadata(tmp
         assert score.answer_coverage == 0.75
         assert score.estimated_cost == 0.008
         assert score.needs_review is False
+
+
+def test_study_agent_memory_record_persists_safe_metadata_fields(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'study_agent_memory.db'}")
+    Base.metadata.create_all(engine)
+    SessionFactory = create_session_factory(engine)
+
+    safe_value = {
+        "decision": "resolved",
+        "reasons": ["low_confidence"],
+        "metrics": {"confidence": 0.31, "source_count": 2, "chunk_count": 4},
+    }
+
+    with SessionFactory() as session:
+        session.add(
+            StudyAgentMemoryRecord(
+                id="memory-1",
+                owner_id="user-1",
+                scope_type="workflow",
+                scope_id="workflow-1",
+                category="review_outcome",
+                key="review-1",
+                value_json=safe_value,
+                confidence=0.31,
+                source_type="review_task",
+                source_id="review-1",
+                privacy_level="safe_metadata",
+            )
+        )
+        session.commit()
+
+    with Session(engine) as session:
+        memory = session.get(StudyAgentMemoryRecord, "memory-1")
+
+        assert memory is not None
+        assert memory.owner_id == "user-1"
+        assert memory.scope_type == "workflow"
+        assert memory.scope_id == "workflow-1"
+        assert memory.category == "review_outcome"
+        assert memory.key == "review-1"
+        assert memory.value_json == safe_value
+        assert memory.confidence == 0.31
+        assert memory.source_type == "review_task"
+        assert memory.source_id == "review-1"
+        assert memory.privacy_level == "safe_metadata"
+        assert memory.created_at is not None
+        assert memory.updated_at is not None
+        assert memory.expires_at is None
+        assert "raw_query" not in memory.value_json

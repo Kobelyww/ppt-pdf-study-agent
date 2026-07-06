@@ -393,6 +393,36 @@ class StudyAgentTraceRecord(Base):
     )
 
 
+class StudyAgentMemoryRecord(Base):
+    __tablename__ = "study_agent_memories"
+    __table_args__ = (
+        Index("ix_study_agent_memories_owner_category", "owner_id", "category"),
+        Index("ix_study_agent_memories_owner_scope", "owner_id", "scope_type", "scope_id"),
+        Index("ix_study_agent_memories_owner_key", "owner_id", "category", "key"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    scope_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    scope_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    category: Mapped[str] = mapped_column(String(64), nullable=False)
+    key: Mapped[str] = mapped_column(String(128), nullable=False)
+    value_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    source_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    privacy_level: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="safe_metadata"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
 class RAGEvaluationRunRecord(Base):
     __tablename__ = "rag_evaluation_runs"
     __table_args__ = (

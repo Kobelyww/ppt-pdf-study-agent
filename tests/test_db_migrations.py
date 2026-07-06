@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.config import RAGConfig
-from src.db.models import ContentVersionRecord
+from src.db.models import ContentVersionRecord, StudyAgentMemoryRecord
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -96,6 +96,9 @@ def test_alembic_upgrade_creates_orm_compatible_sqlite_schema(tmp_path, monkeypa
     trace_columns = {
         column["name"] for column in inspector.get_columns("study_agent_traces")
     }
+    memory_columns = {
+        column["name"] for column in inspector.get_columns("study_agent_memories")
+    }
     eval_run_columns = {
         column["name"] for column in inspector.get_columns("rag_evaluation_runs")
     }
@@ -157,6 +160,22 @@ def test_alembic_upgrade_creates_orm_compatible_sqlite_schema(tmp_path, monkeypa
     }.issubset(trace_columns)
     assert {
         "id",
+        "owner_id",
+        "scope_type",
+        "scope_id",
+        "category",
+        "key",
+        "value_json",
+        "confidence",
+        "source_type",
+        "source_id",
+        "privacy_level",
+        "created_at",
+        "updated_at",
+        "expires_at",
+    }.issubset(memory_columns)
+    assert {
+        "id",
         "created_by",
         "fixture_version",
         "modes",
@@ -183,6 +202,9 @@ def test_alembic_upgrade_creates_orm_compatible_sqlite_schema(tmp_path, monkeypa
         "error_code",
     }.issubset(eval_score_columns)
     trace_indexes = {index["name"] for index in inspector.get_indexes("study_agent_traces")}
+    memory_indexes = {
+        index["name"] for index in inspector.get_indexes("study_agent_memories")
+    }
     review_task_indexes = {index["name"] for index in inspector.get_indexes("review_tasks")}
     eval_run_indexes = {index["name"] for index in inspector.get_indexes("rag_evaluation_runs")}
     eval_score_indexes = {
@@ -195,6 +217,11 @@ def test_alembic_upgrade_creates_orm_compatible_sqlite_schema(tmp_path, monkeypa
         "ix_study_agent_traces_owner_mode_created",
         "ix_study_agent_traces_review_created",
     }.issubset(trace_indexes)
+    assert {
+        "ix_study_agent_memories_owner_category",
+        "ix_study_agent_memories_owner_scope",
+        "ix_study_agent_memories_owner_key",
+    }.issubset(memory_indexes)
     assert "ix_review_tasks_owner_target_status" in review_task_indexes
     assert {
         "ix_rag_eval_runs_created_by_created",
@@ -256,6 +283,30 @@ def test_alembic_upgrade_creates_orm_compatible_sqlite_schema(tmp_path, monkeypa
         )
         with pytest.raises(IntegrityError):
             session.commit()
+
+    with Session(engine) as session:
+        session.add(
+            StudyAgentMemoryRecord(
+                id="memory-1",
+                owner_id="user-1",
+                scope_type="user",
+                scope_id="user-1",
+                category="user_preference",
+                key="answer_style",
+                value_json={"value": "concise"},
+                confidence=1.0,
+                source_type="explicit_preference",
+                source_id="source-1",
+                privacy_level="safe_metadata",
+            )
+        )
+        session.commit()
+
+    with Session(engine) as session:
+        memory = session.get(StudyAgentMemoryRecord, "memory-1")
+        assert memory is not None
+        assert memory.value_json == {"value": "concise"}
+        assert memory.privacy_level == "safe_metadata"
 
     _run_alembic("downgrade", "base")
 

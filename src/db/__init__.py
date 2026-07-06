@@ -15,6 +15,7 @@ from .models import (
     RAGEvaluationCaseScoreRecord,
     RAGEvaluationRunRecord,
     ReviewTaskRecord,
+    StudyAgentMemoryRecord,
     StudyAgentTraceRecord,
     UserRecord,
 )
@@ -37,6 +38,7 @@ __all__ = [
     "RAGEvaluationCaseScoreRecord",
     "RAGEvaluationRunRecord",
     "ReviewTaskRecord",
+    "StudyAgentMemoryRecord",
     "StudyAgentTraceRecord",
     "UserRecord",
     "create_session_factory",
