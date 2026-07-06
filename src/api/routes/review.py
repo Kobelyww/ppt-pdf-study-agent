@@ -1,7 +1,7 @@
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from src.api.request_context import get_user_context
 from src.db.models import ReviewTaskRecord, utc_now
@@ -15,8 +15,23 @@ router = APIRouter(prefix="/api/review-tasks", tags=["review"])
 
 
 class ReviewDecisionRequest(BaseModel):
+    model_config = ConfigDict(hide_input_in_errors=True)
+
     decision: str
     comment: str = ""
+
+    @field_validator("decision")
+    @classmethod
+    def normalize_decision(cls, value: str) -> str:
+        aliases = {
+            "accept": "accepted",
+            "reject": "rejected",
+        }
+        allowed = {"accepted", "rejected", "needs_revision", "resolved"}
+        normalized = aliases.get(value, value)
+        if normalized not in allowed:
+            raise ValueError("unsupported review decision")
+        return normalized
 
 
 @router.get("")
@@ -47,8 +62,9 @@ def list_review_tasks(request: Request) -> list[Any]:
 def submit_review_decision(
     request: Request,
     task_id: str,
-    decision_request: ReviewDecisionRequest,
+    decision_request: dict[str, Any],
 ) -> dict[str, str]:
+    decision_payload = _validated_review_decision(decision_request)
     context = get_user_context(request)
     session_factory = _audit_session_factory(request)
     if session_factory is not None:
@@ -56,8 +72,8 @@ def submit_review_decision(
             session_factory=session_factory,
             actor=Actor(id=context.user_id, role=context.role),
             task_id=task_id,
-            decision=decision_request.decision,
-            comment=decision_request.comment,
+            decision=decision_payload.decision,
+            comment=decision_payload.comment,
         )
         if task is None:
             if _persisted_review_task_exists(session_factory, task_id):
@@ -71,7 +87,7 @@ def submit_review_decision(
             resource_id=task.id,
             request_id=context.request_id,
             metadata={
-                "decision": decision_request.decision,
+                "decision": decision_payload.decision,
                 "target_type": task.target_type,
                 "target_id": task.target_id,
             },
@@ -79,14 +95,14 @@ def submit_review_decision(
         _store_review_decision_memory(
             session_factory=session_factory,
             task=task,
-            decision=decision_request.decision,
+            decision=decision_payload.decision,
         )
-        return {"id": task.id, "status": task.status, "decision": decision_request.decision}
+        return {"id": task.id, "status": task.status, "decision": decision_payload.decision}
 
     task = request.app.state.feedback_service.decide_review_task(
         task_id=task_id,
-        decision=decision_request.decision,
-        comment=decision_request.comment,
+        decision=decision_payload.decision,
+        comment=decision_payload.comment,
         owner_id=context.user_id,
     )
     if task is None:
@@ -103,12 +119,22 @@ def submit_review_decision(
             resource_id=task.id,
             request_id=context.request_id,
             metadata={
-                "decision": decision_request.decision,
+                "decision": decision_payload.decision,
                 "target_type": task.target_type,
                 "target_id": task.target_id,
             },
         )
-    return {"id": task.id, "status": task.status, "decision": decision_request.decision}
+    return {"id": task.id, "status": task.status, "decision": decision_payload.decision}
+
+
+def _validated_review_decision(payload: dict[str, Any]) -> ReviewDecisionRequest:
+    try:
+        return ReviewDecisionRequest.model_validate(payload)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="Unsupported review decision",
+        ) from exc
 
 
 def _audit_session_factory(request: Request):
@@ -194,7 +220,7 @@ def _store_review_decision_memory(
             decision=decision,
             metadata=metadata,
         )
-    except ValueError:
+    except Exception:
         return False
     return True
 

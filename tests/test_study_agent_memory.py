@@ -151,6 +151,40 @@ def test_review_outcome_persisted_value_json_excludes_raw_metadata(memory_contex
     assert "raw hidden prompt" not in encoded_value
 
 
+def test_review_outcome_is_idempotent_per_review_task(memory_context):
+    service, Session = memory_context
+
+    first_id = service.store_review_outcome(
+        owner_id="owner-1",
+        workflow_id="workflow-1",
+        review_task_id="review-1",
+        reasons=["low_confidence"],
+        decision="accepted",
+        metadata={"confidence": 0.2, "source_count": 1, "chunk_count": 2},
+    )
+    second_id = service.store_review_outcome(
+        owner_id="owner-1",
+        workflow_id="workflow-1",
+        review_task_id="review-1",
+        reasons=["low_confidence"],
+        decision="resolved",
+        metadata={"confidence": 0.4, "source_count": 3, "chunk_count": 4},
+    )
+
+    assert second_id == first_id
+    assert service.summary("owner-1")["review_reason_counts"] == {"low_confidence": 1}
+    with Session() as session:
+        records = session.query(StudyAgentMemoryRecord).all()
+
+    assert len(records) == 1
+    assert records[0].value_json == {
+        "decision": "resolved",
+        "reasons": ["low_confidence"],
+        "metrics": {"chunk_count": 4, "confidence": 0.4, "source_count": 3},
+    }
+    assert records[0].confidence == 0.4
+
+
 def test_expired_memory_is_not_recalled(memory_service):
     memory_service.store_preference(
         "owner-1",

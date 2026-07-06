@@ -32,6 +32,7 @@ from src.services.study_agent import (
     StudyTarget,
     StudyVerification,
 )
+from src.services.study_agent_memory import StudyAgentMemoryService
 from src.services.study_agent_workflow import new_workflow_id
 from src.storage.backend import LocalStorageBackend
 
@@ -1083,6 +1084,120 @@ def test_review_decision_creates_safe_review_outcome_memory(tmp_path: Path):
         "output_summary",
     ]:
         assert forbidden not in serialized
+
+
+def test_review_decision_memory_is_idempotent_when_task_is_decided_twice(
+    tmp_path: Path,
+):
+    workflow_id = new_workflow_id()
+    Session = _session_factory()
+    app = create_app(
+        session_factory=Session,
+        secret_key="test-secret",
+        allow_dev_user_header=False,
+        study_agent_orchestrator=WorkflowStudyAgentOrchestrator(
+            workflow_id,
+            needs_review=True,
+        ),
+    )
+    client = TestClient(app)
+    headers = _login(client)
+
+    created = client.post(
+        "/api/study-agent/query",
+        json={"query": "什么是导数？"},
+        headers={**headers, "x-request-id": "req-study-memory-idempotent"},
+    )
+    assert created.status_code == 200
+    review_task_id = created.json()["review_task"]["id"]
+
+    first = client.post(
+        f"/api/review-tasks/{review_task_id}/decision",
+        json={"decision": "resolved", "comment": "first raw comment"},
+        headers=headers,
+    )
+    second = client.post(
+        f"/api/review-tasks/{review_task_id}/decision",
+        json={"decision": "resolved", "comment": "second raw comment"},
+        headers=headers,
+    )
+    summary = client.get("/api/study-agent/memories/summary", headers=headers)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert summary.json()["review_reason_counts"] == {"low_confidence": 1}
+    with Session() as session:
+        memories = session.query(StudyAgentMemoryRecord).all()
+
+    assert len(memories) == 1
+    assert memories[0].key == review_task_id
+
+
+def test_review_decision_memory_write_failure_does_not_break_decision(
+    tmp_path: Path,
+    monkeypatch,
+):
+    workflow_id = new_workflow_id()
+    Session = _session_factory()
+    app = create_app(
+        session_factory=Session,
+        secret_key="test-secret",
+        allow_dev_user_header=False,
+        study_agent_orchestrator=WorkflowStudyAgentOrchestrator(
+            workflow_id,
+            needs_review=True,
+        ),
+    )
+    client = TestClient(app)
+    headers = _login(client)
+
+    created = client.post(
+        "/api/study-agent/query",
+        json={"query": "什么是导数？"},
+        headers={**headers, "x-request-id": "req-study-memory-runtime-error"},
+    )
+    assert created.status_code == 200
+    review_task_id = created.json()["review_task"]["id"]
+
+    def raise_memory_error(self, **kwargs):
+        raise RuntimeError("raw memory backend failure sk-secret-token")
+
+    monkeypatch.setattr(
+        StudyAgentMemoryService,
+        "store_review_outcome",
+        raise_memory_error,
+    )
+    response = client.post(
+        f"/api/review-tasks/{review_task_id}/decision",
+        json={"decision": "resolved", "comment": "raw reviewer comment"},
+        headers={**headers, "x-request-id": "req-study-memory-runtime-decision"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "id": review_task_id,
+        "status": "decided",
+        "decision": "resolved",
+    }
+    with Session() as session:
+        task = session.get(ReviewTaskRecord, review_task_id)
+        memory_count = session.query(StudyAgentMemoryRecord).count()
+        event = (
+            session.query(AuditEventRecord)
+            .filter(AuditEventRecord.action == "review_task.decided")
+            .one()
+        )
+
+    assert task.status == "decided"
+    assert task.decision == "resolved"
+    assert memory_count == 0
+    serialized = json.dumps(
+        {"response": response.json(), "audit": event.event_metadata},
+        ensure_ascii=False,
+    )
+    assert "raw memory backend failure" not in serialized
+    assert "sk-secret-token" not in serialized
+    assert "raw reviewer comment" not in serialized
 
 
 def test_review_decision_without_safe_reason_does_not_fail_or_write_memory(

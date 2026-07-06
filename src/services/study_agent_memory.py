@@ -92,9 +92,33 @@ class StudyAgentMemoryService:
         safe_decision = decision if decision in SAFE_REVIEW_DECISIONS else "resolved"
         safe_metrics = self._safe_metrics(metadata or {})
         confidence = safe_metrics.get("confidence", 1.0)
-        memory_id = f"memory-{uuid4().hex}"
+        safe_value = {
+            "decision": safe_decision,
+            "reasons": safe_reasons,
+            "metrics": safe_metrics,
+        }
 
         with self.session_factory() as session:
+            existing = session.scalars(
+                select(StudyAgentMemoryRecord).where(
+                    StudyAgentMemoryRecord.owner_id == owner_id,
+                    StudyAgentMemoryRecord.category == "review_outcome",
+                    StudyAgentMemoryRecord.key == review_task_id,
+                )
+            ).first()
+            if existing is not None:
+                existing.scope_type = "workflow"
+                existing.scope_id = workflow_id
+                existing.value_json = safe_value
+                existing.confidence = float(confidence)
+                existing.source_type = "review_task"
+                existing.source_id = review_task_id
+                existing.privacy_level = "safe_metadata"
+                existing.updated_at = datetime.now(timezone.utc)
+                session.commit()
+                return existing.id
+
+            memory_id = f"memory-{uuid4().hex}"
             session.add(
                 StudyAgentMemoryRecord(
                     id=memory_id,
@@ -103,11 +127,7 @@ class StudyAgentMemoryService:
                     scope_id=workflow_id,
                     category="review_outcome",
                     key=review_task_id,
-                    value_json={
-                        "decision": safe_decision,
-                        "reasons": safe_reasons,
-                        "metrics": safe_metrics,
-                    },
+                    value_json=safe_value,
                     confidence=float(confidence),
                     source_type="review_task",
                     source_id=review_task_id,

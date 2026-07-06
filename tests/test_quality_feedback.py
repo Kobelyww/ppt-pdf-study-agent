@@ -72,7 +72,7 @@ def test_feedback_api_creates_review_task_and_accepts_decision():
     assert decision_response.json() == {
         "id": review_tasks[0]["id"],
         "status": "decided",
-        "decision": "accept",
+        "decision": "accepted",
     }
 
 

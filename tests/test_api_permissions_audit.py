@@ -194,15 +194,62 @@ def test_review_decision_is_owner_scoped_and_records_audit(tmp_path: Path):
 
     assert forbidden.status_code == 403
     assert response.status_code == 200
+    assert response.json()["decision"] == "accepted"
     with Session() as session:
+        stored_task = session.get(ReviewTaskRecord, task["id"])
         event = (
             session.query(AuditEventRecord)
             .filter(AuditEventRecord.action == "review_task.decided")
             .one()
         )
+    assert stored_task.decision == "accepted"
     assert event.actor_id == "user-1"
     assert event.resource_id == task["id"]
-    assert event.event_metadata["decision"] == "accept"
+    assert event.event_metadata["decision"] == "accepted"
+
+
+def test_review_decision_rejects_raw_decision_before_persistence_or_audit(
+    tmp_path: Path,
+):
+    client, _service, Session = _client(tmp_path)
+    client.post(
+        "/api/feedback",
+        headers={"x-user-id": "user-1"},
+        json={
+            "target_type": "question",
+            "target_id": "q-1",
+            "rating": 1,
+            "reason": "incorrect_answer",
+            "comment": "The answer is wrong.",
+            "created_by": "user-1",
+        },
+    )
+    task = client.get(
+        "/api/review-tasks",
+        headers={"x-user-id": "user-1"},
+    ).json()[0]
+
+    response = client.post(
+        f"/api/review-tasks/{task['id']}/decision",
+        headers={"x-user-id": "user-1", "x-request-id": "req-review-invalid"},
+        json={"decision": "sk-secret-token", "comment": "raw reviewer comment"},
+    )
+
+    assert response.status_code == 422
+    with Session() as session:
+        stored_task = session.get(ReviewTaskRecord, task["id"])
+        audit_count = (
+            session.query(AuditEventRecord)
+            .filter(AuditEventRecord.action == "review_task.decided")
+            .count()
+        )
+
+    assert stored_task.status == "open"
+    assert stored_task.decision is None
+    assert audit_count == 0
+    serialized = response.text
+    assert "sk-secret-token" not in serialized
+    assert "raw reviewer comment" not in serialized
 
 
 def test_feedback_ignores_body_created_by(tmp_path: Path):
