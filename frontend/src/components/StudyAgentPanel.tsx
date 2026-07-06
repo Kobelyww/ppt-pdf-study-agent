@@ -110,6 +110,23 @@ function WorkflowTimeline({ workflow }: { workflow: StudyAgentResult["workflow"]
   );
 }
 
+function ReviewTaskStatus({ task }: { task: StudyAgentResult["review_task"] }) {
+  if (!task) return null;
+  return (
+    <div className="study-agent-review-task" aria-label="Study Agent review task">
+      <span>
+        <strong>Review task</strong> {task.id}
+      </span>
+      <span>
+        <strong>Status</strong> {task.status}
+      </span>
+      <span>
+        <strong>Reason</strong> {task.reason}
+      </span>
+    </div>
+  );
+}
+
 function StudyAgentPanel({
   apiClient,
   documents,
@@ -411,6 +428,7 @@ function StudyAgentPanel({
               Evidence index fallback: {result.trace.fallback_reason}
             </div>
           ) : null}
+          <ReviewTaskStatus task={result.review_task} />
           <WorkflowTimeline workflow={result.workflow ?? result.trace?.workflow} />
           <pre className="content-block agent-answer">{result.draft.content}</pre>
           <EvidenceViewer result={result} />

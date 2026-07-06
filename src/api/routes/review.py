@@ -1,3 +1,5 @@
+from typing import Any
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
@@ -5,7 +7,6 @@ from src.api.request_context import get_user_context
 from src.db.models import ReviewTaskRecord, utc_now
 from src.security.audit import record_audit_event
 from src.security.permissions import Actor, can_view_review_task
-from src.services.feedback_service import ReviewTask
 
 
 router = APIRouter(prefix="/api/review-tasks", tags=["review"])
@@ -17,7 +18,7 @@ class ReviewDecisionRequest(BaseModel):
 
 
 @router.get("")
-def list_review_tasks(request: Request) -> list[ReviewTask | dict]:
+def list_review_tasks(request: Request) -> list[Any]:
     context = get_user_context(request)
     session_factory = _audit_session_factory(request)
     if session_factory is not None:
@@ -105,10 +106,15 @@ def submit_review_decision(
 
 def _audit_session_factory(request: Request):
     document_service = getattr(request.app.state, "document_service", None)
-    return getattr(document_service, "session_factory", None)
+    return getattr(document_service, "session_factory", None) or getattr(
+        request.app.state,
+        "session_factory",
+        None,
+    )
 
 
 def _review_task_payload(record: ReviewTaskRecord) -> dict:
+    metadata = record.task_metadata or {}
     return {
         "id": record.id,
         "owner_id": record.owner_id,
@@ -119,6 +125,8 @@ def _review_task_payload(record: ReviewTaskRecord) -> dict:
         "assignee": record.assignee,
         "decision": record.decision,
         "comment": record.comment,
+        "metadata": metadata,
+        "task_metadata": metadata,
     }
 
 

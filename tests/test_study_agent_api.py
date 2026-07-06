@@ -15,6 +15,7 @@ from src.db.models import (
     Document,
     DocumentArtifactRecord,
     DocumentChunkRecord,
+    ReviewTaskRecord,
     UserRecord,
 )
 from src.security.auth import hash_password
@@ -49,7 +50,7 @@ class FakeStudyAgentOrchestrator:
             confidence=0.8,
             reason="simple token-overlap retrieval",
         )
-        return StudyAgentResult(
+        result = StudyAgentResult(
             request=request,
             plan=StudyPlan(
                 mode=RetrievalMode.SIMPLE,
@@ -80,6 +81,7 @@ class FakeStudyAgentOrchestrator:
                 "chunk_count": 1,
             },
         )
+        return result
 
 
 @dataclass
@@ -100,7 +102,7 @@ class SensitivePolicyStudyAgentOrchestrator:
             confidence=0.8,
             reason="simple token-overlap retrieval",
         )
-        return StudyAgentResult(
+        result = StudyAgentResult(
             request=request,
             plan=StudyPlan(
                 mode=RetrievalMode.SIMPLE,
@@ -140,11 +142,14 @@ class SensitivePolicyStudyAgentOrchestrator:
                 },
             },
         )
+        return result
 
 
 @dataclass
 class WorkflowStudyAgentOrchestrator:
     workflow_id: str
+    needs_review: bool = False
+    review_reason: str = "low_confidence"
 
     async def run(self, payload: dict) -> StudyAgentResult:
         request = StudyRequest(query=payload["query"], target=StudyTarget.ANSWER)
@@ -156,7 +161,7 @@ class WorkflowStudyAgentOrchestrator:
             confidence=0.8,
             reason="simple token-overlap retrieval",
         )
-        return StudyAgentResult(
+        result = StudyAgentResult(
             request=request,
             plan=StudyPlan(
                 mode=RetrievalMode.SIMPLE,
@@ -172,24 +177,27 @@ class WorkflowStudyAgentOrchestrator:
                 used_chunk_count=1,
             ),
             verification=StudyVerification(
-                passed=True,
-                needs_review=False,
-                confidence=0.8,
-                issues=(),
-                source_recall=1.0,
-                answer_term_recall=1.0,
+                passed=not self.needs_review,
+                needs_review=self.needs_review,
+                confidence=0.42 if self.needs_review else 0.8,
+                issues=("low confidence",) if self.needs_review else (),
+                source_recall=0.5 if self.needs_review else 1.0,
+                answer_term_recall=0.25 if self.needs_review else 1.0,
             ),
             audit_metadata={
                 "mode": "simple_rag",
                 "target": "answer",
-                "needs_review": False,
+                "needs_review": self.needs_review,
                 "source_count": 1,
                 "chunk_count": 1,
+                "citation_count": 1,
+                "issue_count": 1 if self.needs_review else 0,
+                "prompt": "hidden prompt",
                 "workflow": {
                     "workflow_id": self.workflow_id,
-                    "status": "completed",
-                    "current_stage": "trace",
-                    "needs_review": False,
+                    "status": "needs_review" if self.needs_review else "completed",
+                    "current_stage": "review_gate" if self.needs_review else "trace",
+                    "needs_review": self.needs_review,
                     "stage_count": 2,
                     "stages": [
                         {
@@ -208,8 +216,8 @@ class WorkflowStudyAgentOrchestrator:
                             },
                         },
                         {
-                            "stage": "retrieve",
-                            "status": "passed",
+                            "stage": "review_gate" if self.needs_review else "retrieve",
+                            "status": "needs_review" if self.needs_review else "passed",
                             "duration_ms": 3.0,
                             "input_summary": {"selected_mode": "simple_rag"},
                             "output_summary": {
@@ -223,6 +231,21 @@ class WorkflowStudyAgentOrchestrator:
                 },
             },
         )
+        if self.needs_review:
+            workflow = result.audit_metadata["workflow"]
+            workflow["stages"][1]["review_reason"] = self.review_reason
+            workflow["stages"][1]["output_summary"].update(
+                {
+                    "needs_review": True,
+                    "review_reason": self.review_reason,
+                    "confidence": 0.42,
+                    "source_recall": 0.5,
+                    "answer_term_recall": 0.25,
+                    "citation_count": 1,
+                    "issue_count": 1,
+                }
+            )
+        return result
 
 
 def _session_factory():
@@ -604,6 +627,185 @@ def test_study_agent_query_returns_safe_workflow_payload(tmp_path: Path):
         assert value not in serialized
     for key in ["chunk_content", "prompt", "token"]:
         assert key not in serialized
+
+
+def test_study_agent_query_creates_review_task_for_needs_review_workflow(tmp_path: Path):
+    workflow_id = new_workflow_id()
+    Session = _session_factory()
+    app = create_app(
+        session_factory=Session,
+        secret_key="test-secret",
+        allow_dev_user_header=False,
+        study_agent_orchestrator=WorkflowStudyAgentOrchestrator(
+            workflow_id,
+            needs_review=True,
+        ),
+    )
+    client = TestClient(app)
+    headers = _login(client)
+
+    response = client.post(
+        "/api/study-agent/query",
+        json={"query": "什么是导数？"},
+        headers={**headers, "x-request-id": "req-study-review-task"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    review_task = payload["review_task"]
+    assert review_task["id"].startswith("review-")
+    assert review_task["target_type"] == "study_agent_workflow"
+    assert review_task["target_id"] == workflow_id
+    assert review_task["status"] == "open"
+    assert review_task["reason"] == "low_confidence"
+    assert review_task["metadata"]["workflow_id"] == workflow_id
+    assert review_task["metadata"]["trace_id"] == payload["trace"]["trace_id"]
+    with Session() as session:
+        records = session.query(ReviewTaskRecord).all()
+    assert len(records) == 1
+    assert records[0].owner_id == "user-1"
+
+
+def test_study_agent_query_reuses_open_review_task_for_duplicate_workflow(tmp_path: Path):
+    workflow_id = new_workflow_id()
+    Session = _session_factory()
+    app = create_app(
+        session_factory=Session,
+        secret_key="test-secret",
+        allow_dev_user_header=False,
+        study_agent_orchestrator=WorkflowStudyAgentOrchestrator(
+            workflow_id,
+            needs_review=True,
+        ),
+    )
+    client = TestClient(app)
+    headers = _login(client)
+
+    first = client.post(
+        "/api/study-agent/query",
+        json={"query": "什么是导数？"},
+        headers={**headers, "x-request-id": "req-study-review-task-1"},
+    )
+    second = client.post(
+        "/api/study-agent/query",
+        json={"query": "什么是导数？"},
+        headers={**headers, "x-request-id": "req-study-review-task-2"},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["review_task"]["id"] == first.json()["review_task"]["id"]
+    with Session() as session:
+        records = session.query(ReviewTaskRecord).all()
+    assert len(records) == 1
+
+
+def test_study_agent_review_task_payloads_and_audit_metadata_are_safe(tmp_path: Path):
+    workflow_id = new_workflow_id()
+    Session = _session_factory()
+    app = create_app(
+        session_factory=Session,
+        secret_key="test-secret",
+        allow_dev_user_header=False,
+        study_agent_orchestrator=WorkflowStudyAgentOrchestrator(
+            workflow_id,
+            needs_review=True,
+        ),
+    )
+    client = TestClient(app)
+    headers = _login(client)
+
+    response = client.post(
+        "/api/study-agent/query",
+        json={"query": "什么是导数？"},
+        headers={**headers, "x-request-id": "req-study-review-task-safe"},
+    )
+
+    assert response.status_code == 200
+    with Session() as session:
+        events = (
+            session.query(AuditEventRecord)
+            .filter(AuditEventRecord.action.in_(["study_agent.query", "review_task.created"]))
+            .all()
+        )
+        task = session.query(ReviewTaskRecord).one()
+    serialized = json.dumps(
+        {
+            "response_review_task": response.json()["review_task"],
+            "task_metadata": task.task_metadata,
+            "audit_metadata": [event.event_metadata for event in events],
+        },
+        ensure_ascii=False,
+    )
+    for forbidden in [
+        "什么是导数",
+        "导数原文",
+        "hidden prompt",
+        "sk-secret-token",
+        "generated answer",
+        "chunk_content",
+        "prompt",
+        "token",
+        "input_summary",
+        "output_summary",
+    ]:
+        assert forbidden not in serialized
+
+
+def test_review_tasks_list_includes_safe_metadata_and_remains_owner_scoped(
+    tmp_path: Path,
+):
+    workflow_id = new_workflow_id()
+    Session = _session_factory()
+    with Session() as session:
+        session.add(
+            UserRecord(
+                id="user-2",
+                email="other@example.com",
+                password_hash=hash_password("password-123"),
+                role="user",
+                is_active=True,
+            )
+        )
+        session.commit()
+    app = create_app(
+        session_factory=Session,
+        secret_key="test-secret",
+        allow_dev_user_header=False,
+        study_agent_orchestrator=WorkflowStudyAgentOrchestrator(
+            workflow_id,
+            needs_review=True,
+        ),
+    )
+    client = TestClient(app)
+    owner_headers = _login(client)
+    other_login = client.post(
+        "/api/auth/login",
+        json={"email": "other@example.com", "password": "password-123"},
+    )
+    assert other_login.status_code == 200
+    other_headers = {"Authorization": f"Bearer {other_login.json()['access_token']}"}
+
+    created = client.post(
+        "/api/study-agent/query",
+        json={"query": "什么是导数？"},
+        headers={**owner_headers, "x-request-id": "req-study-review-list"},
+    )
+    owner_list = client.get("/api/review-tasks", headers=owner_headers)
+    other_list = client.get("/api/review-tasks", headers=other_headers)
+
+    assert created.status_code == 200
+    assert owner_list.status_code == 200
+    assert other_list.status_code == 200
+    tasks = owner_list.json()
+    assert len(tasks) == 1
+    assert tasks[0]["id"] == created.json()["review_task"]["id"]
+    assert tasks[0]["metadata"]["workflow_id"] == workflow_id
+    assert tasks[0]["metadata"]["review_reasons"] == ["low_confidence"]
+    assert tasks[0]["metadata"]["source_count"] == 1
+    assert tasks[0]["metadata"]["chunk_count"] == 1
+    assert other_list.json() == []
+    assert "导数原文" not in owner_list.text
 
 
 def test_study_agent_workflow_detail_is_owner_scoped(tmp_path: Path):

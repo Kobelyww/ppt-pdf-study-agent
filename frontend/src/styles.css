@@ -666,9 +666,31 @@ dd {
 }
 
 .review-list span,
-.review-list strong {
+.review-list strong,
+.review-list div {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.review-list li > div {
+  display: grid;
+  gap: 5px;
+}
+
+.review-task-metadata {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.review-task-metadata span {
+  padding: 4px 7px;
+  border: 1px solid #d8dee8;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #465366;
+  font-size: 0.78rem;
 }
 
 .study-agent-panel {
@@ -793,7 +815,8 @@ dd {
   letter-spacing: 0;
 }
 
-.study-agent-policy {
+.study-agent-policy,
+.study-agent-review-task {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
@@ -803,7 +826,8 @@ dd {
   font-size: 0.85rem;
 }
 
-.study-agent-policy span {
+.study-agent-policy span,
+.study-agent-review-task span {
   min-width: 0;
   padding: 6px 9px;
   border: 1px solid #d8dee8;
@@ -812,7 +836,8 @@ dd {
   overflow-wrap: anywhere;
 }
 
-.study-agent-policy strong {
+.study-agent-policy strong,
+.study-agent-review-task strong {
   color: #18212f;
   font-weight: 700;
 }

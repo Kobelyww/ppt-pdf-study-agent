@@ -78,6 +78,8 @@ export interface ReviewTaskSummary {
   reason: string;
   decision?: string | null;
   comment?: string | null;
+  metadata?: Record<string, unknown>;
+  task_metadata?: Record<string, unknown>;
 }
 
 export interface AuthenticatedUser {
@@ -160,6 +162,16 @@ export interface StudyAgentPolicyDiagnostic {
   experiment_enabled?: boolean | null;
 }
 
+export interface StudyAgentReviewTaskDiagnostic {
+  id: string;
+  target_type: string;
+  target_id: string;
+  status: string;
+  reason: string;
+  metadata?: Record<string, unknown>;
+  task_metadata?: Record<string, unknown>;
+}
+
 export interface StudyAgentResult {
   request: {
     query: string;
@@ -205,6 +217,7 @@ export interface StudyAgentResult {
   trace?: StudyAgentTraceSummary;
   policy?: StudyAgentPolicyDiagnostic | null;
   workflow?: StudyAgentWorkflowDiagnostic | null;
+  review_task?: StudyAgentReviewTaskDiagnostic | null;
   audit_metadata?: Record<string, unknown>;
 }
 

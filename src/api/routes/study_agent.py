@@ -15,6 +15,7 @@ from src.services.study_agent_documents import StudyAgentDocumentError
 from src.services.study_agent_index import StudyDocumentIndexService
 from src.services.study_agent_runtime import StudyAgentRuntimeService
 from src.services.study_agent_trace import StudyAgentTraceService, safe_policy_metadata
+from src.services.study_agent_review_tasks import StudyAgentReviewTaskService
 from src.services.study_agent_workflow import sanitize_workflow_payload
 
 
@@ -84,6 +85,16 @@ async def query_study_agent(
     workflow = sanitize_workflow_payload(audit_metadata.get("workflow"))
     if workflow is not None:
         response_payload["workflow"] = workflow
+        review_task = _ensure_study_agent_review_task(
+            request,
+            actor_id=context.user_id,
+            request_id=context.request_id,
+            workflow=audit_metadata.get("workflow"),
+            trace_payload=trace_payload,
+            audit_metadata=audit_metadata,
+        )
+        if review_task is not None:
+            response_payload["review_task"] = review_task
     if trace_payload is not None:
         response_payload["trace"] = trace_payload
     return response_payload
@@ -275,3 +286,50 @@ def _record_study_agent_audit(
         request_id=request_id,
         metadata=metadata,
     )
+
+
+def _ensure_study_agent_review_task(
+    request: Request,
+    *,
+    actor_id: str,
+    request_id: str,
+    workflow: dict[str, Any],
+    trace_payload: dict[str, Any] | None,
+    audit_metadata: dict[str, Any],
+) -> dict[str, Any] | None:
+    session_factory = getattr(request.app.state, "session_factory", None)
+    if session_factory is None:
+        return None
+
+    task = StudyAgentReviewTaskService(
+        _non_expiring_session_factory(session_factory)
+    ).ensure_for_workflow(
+        owner_id=actor_id,
+        request_id=request_id,
+        workflow=workflow,
+        trace_payload=trace_payload,
+        result_audit_metadata=audit_metadata,
+    )
+    if task is None:
+        return None
+
+    created = bool(task.pop("_created", False))
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    trace_id = metadata.get("trace_id")
+    workflow_id = metadata.get("workflow_id") or task.get("target_id")
+    record_audit_event(
+        session_factory=_non_expiring_session_factory(session_factory),
+        actor_id=actor_id,
+        action="review_task.created" if created else "review_task.linked",
+        resource_type="review_task",
+        resource_id=task["id"],
+        request_id=request_id,
+        metadata={
+            "target_type": task.get("target_type"),
+            "target_id": task.get("target_id"),
+            "reason": task.get("reason"),
+            "workflow_id": workflow_id,
+            "trace_id": trace_id,
+        },
+    )
+    return task
