@@ -90,7 +90,7 @@ def test_safe_review_task_metadata_omits_nested_raw_content_and_keeps_safe_count
         "workflow_id": "workflow-1",
         "trace_id": "trace-1",
         "selected_mode": "agentic_rag",
-        "review_reasons": ["low_confidence", "low_source_recall"],
+        "review_reasons": ["low_confidence"],
         "confidence": 0.4,
         "source_recall": 0.5,
         "answer_term_recall": 0.25,
@@ -110,6 +110,23 @@ def test_safe_review_task_metadata_omits_nested_raw_content_and_keeps_safe_count
         "output_summary",
     ]:
         assert forbidden not in serialized
+
+
+def test_safe_review_task_metadata_ignores_unknown_regex_shaped_review_reason():
+    workflow = _workflow()
+    workflow["stages"][1]["review_reason"] = "custom_lowercase_reason"
+    workflow["stages"][1]["output_summary"]["review_reason"] = "another_custom_reason"
+
+    metadata = safe_review_task_metadata(
+        workflow=workflow,
+        trace_payload={"trace_id": "trace-1"},
+        result_audit_metadata={},
+    )
+
+    assert "review_reasons" not in metadata
+    serialized = str(metadata)
+    assert "custom_lowercase_reason" not in serialized
+    assert "another_custom_reason" not in serialized
 
 
 def test_ensure_for_workflow_creates_one_open_task_when_workflow_needs_review():

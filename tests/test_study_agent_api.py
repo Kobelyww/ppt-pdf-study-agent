@@ -752,6 +752,45 @@ def test_study_agent_review_task_payloads_and_audit_metadata_are_safe(tmp_path: 
         assert forbidden not in serialized
 
 
+def test_study_agent_review_task_ignores_unknown_raw_review_reason(tmp_path: Path):
+    workflow_id = new_workflow_id()
+    Session = _session_factory()
+    app = create_app(
+        session_factory=Session,
+        secret_key="test-secret",
+        allow_dev_user_header=False,
+        study_agent_orchestrator=WorkflowStudyAgentOrchestrator(
+            workflow_id,
+            needs_review=True,
+            review_reason="custom_lowercase_reason",
+        ),
+    )
+    client = TestClient(app)
+    headers = _login(client)
+
+    response = client.post(
+        "/api/study-agent/query",
+        json={"query": "什么是导数？"},
+        headers={**headers, "x-request-id": "req-study-review-task-unknown-reason"},
+    )
+
+    assert response.status_code == 200
+    review_task = response.json()["review_task"]
+    assert review_task["reason"] == "needs_review"
+    assert "review_reasons" not in review_task["metadata"]
+    serialized = json.dumps(review_task, ensure_ascii=False)
+    for forbidden in [
+        "custom_lowercase_reason",
+        "导数原文",
+        "hidden prompt",
+        "sk-secret-token",
+        "chunk_content",
+        "prompt",
+        "token",
+    ]:
+        assert forbidden not in serialized
+
+
 def test_review_tasks_list_includes_safe_metadata_and_remains_owner_scoped(
     tmp_path: Path,
 ):

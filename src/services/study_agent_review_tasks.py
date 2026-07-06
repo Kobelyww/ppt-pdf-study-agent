@@ -14,7 +14,15 @@ TARGET_TYPE = "study_agent_workflow"
 OPEN_STATUS = "open"
 
 _SAFE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_:\.-]{1,128}$")
-_SAFE_REASON_PATTERN = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
+_SAFE_REVIEW_REASONS = {
+    "verification_failed",
+    "low_confidence",
+    "missing_citations",
+    "empty_evidence",
+    "policy_blocked_without_fallback",
+    "target_used_fallback_evidence",
+    "agentic_step_budget_exhausted",
+}
 _SAFE_MODE_VALUES = {"simple_rag", "graph_rag_lite", "agentic_rag"}
 _SAFE_COUNT_KEYS = {
     "source_count",
@@ -248,7 +256,7 @@ def _safe_mode(value: Any) -> str | None:
 def _safe_reason(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
-    return value if _SAFE_REASON_PATTERN.fullmatch(value) else None
+    return value if value in _SAFE_REVIEW_REASONS else None
 
 
 def _safe_int(value: Any) -> int:

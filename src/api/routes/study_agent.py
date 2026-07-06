@@ -89,7 +89,7 @@ async def query_study_agent(
             request,
             actor_id=context.user_id,
             request_id=context.request_id,
-            workflow=audit_metadata.get("workflow"),
+            workflow=workflow,
             trace_payload=trace_payload,
             audit_metadata=audit_metadata,
         )
