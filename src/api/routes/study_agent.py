@@ -13,6 +13,7 @@ from src.api.request_context import get_user_context
 from src.security.audit import record_audit_event
 from src.services.study_agent_documents import StudyAgentDocumentError
 from src.services.study_agent_index import StudyDocumentIndexService
+from src.services.study_agent_memory import StudyAgentMemoryService
 from src.services.study_agent_runtime import StudyAgentRuntimeService
 from src.services.study_agent_trace import StudyAgentTraceService, safe_policy_metadata
 from src.services.study_agent_review_tasks import StudyAgentReviewTaskService
@@ -151,6 +152,38 @@ def get_study_agent_index_summary(request: Request) -> dict[str, Any]:
     return StudyDocumentIndexService(session_factory=session_factory).summary(
         owner_id=context.user_id
     )
+
+
+@router.get("/memories/summary")
+def get_study_agent_memory_summary(request: Request) -> dict[str, Any]:
+    context = get_user_context(request)
+    session_factory = getattr(request.app.state, "session_factory", None)
+    if session_factory is None:
+        return {
+            "preferences": {},
+            "review_reason_counts": {},
+            "memory_record_count": 0,
+        }
+    return StudyAgentMemoryService(
+        _non_expiring_session_factory(session_factory)
+    ).summary(context.user_id)
+
+
+@router.delete("/memories/{memory_id}")
+def delete_study_agent_memory(request: Request, memory_id: str) -> dict[str, str]:
+    context = get_user_context(request)
+    session_factory = getattr(request.app.state, "session_factory", None)
+    if session_factory is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Study agent memory store is not configured",
+        )
+    deleted = StudyAgentMemoryService(
+        _non_expiring_session_factory(session_factory)
+    ).delete_memory(context.user_id, memory_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Memory not found")
+    return {"id": memory_id, "status": "deleted"}
 
 
 def _study_agent_runner(request: Request) -> Any | None:

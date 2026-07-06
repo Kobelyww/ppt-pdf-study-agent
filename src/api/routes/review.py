@@ -7,6 +7,7 @@ from src.api.request_context import get_user_context
 from src.db.models import ReviewTaskRecord, utc_now
 from src.security.audit import record_audit_event
 from src.security.permissions import Actor, can_view_review_task
+from src.services.study_agent_memory import SAFE_REVIEW_REASONS, StudyAgentMemoryService
 from src.services.study_agent_review_tasks import sanitize_review_task_metadata
 
 
@@ -74,6 +75,11 @@ def submit_review_decision(
                 "target_type": task.target_type,
                 "target_id": task.target_id,
             },
+        )
+        _store_review_decision_memory(
+            session_factory=session_factory,
+            task=task,
+            decision=decision_request.decision,
         )
         return {"id": task.id, "status": task.status, "decision": decision_request.decision}
 
@@ -162,3 +168,47 @@ def _decide_persisted_review_task(
 def _persisted_review_task_exists(session_factory, task_id: str) -> bool:
     with session_factory() as session:
         return session.get(ReviewTaskRecord, task_id) is not None
+
+
+def _store_review_decision_memory(
+    *,
+    session_factory,
+    task: ReviewTaskRecord,
+    decision: str,
+) -> bool:
+    if task.target_type != "study_agent_workflow":
+        return False
+
+    metadata = sanitize_review_task_metadata(task.task_metadata)
+    reasons = _safe_review_memory_reasons(task=task, metadata=metadata)
+    if not reasons:
+        return False
+
+    workflow_id = metadata.get("workflow_id") or task.target_id
+    try:
+        StudyAgentMemoryService(session_factory).store_review_outcome(
+            owner_id=task.owner_id,
+            workflow_id=workflow_id,
+            review_task_id=task.id,
+            reasons=reasons,
+            decision=decision,
+            metadata=metadata,
+        )
+    except ValueError:
+        return False
+    return True
+
+
+def _safe_review_memory_reasons(
+    *,
+    task: ReviewTaskRecord,
+    metadata: dict,
+) -> list[str]:
+    metadata_reasons = metadata.get("review_reasons")
+    if isinstance(metadata_reasons, list):
+        return [
+            reason
+            for reason in metadata_reasons
+            if isinstance(reason, str) and reason in SAFE_REVIEW_REASONS
+        ]
+    return [task.reason] if task.reason in SAFE_REVIEW_REASONS else []

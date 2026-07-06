@@ -172,6 +172,12 @@ export interface StudyAgentReviewTaskDiagnostic {
   task_metadata?: Record<string, unknown>;
 }
 
+export interface StudyAgentMemorySummary {
+  preferences: Record<string, string>;
+  review_reason_counts: Record<string, number>;
+  memory_record_count: number;
+}
+
 export interface StudyAgentResult {
   request: {
     query: string;
@@ -376,6 +382,32 @@ export async function queryStudyAgent(
     body: JSON.stringify(payload),
   });
   return parseJson<StudyAgentResult>(response, "Failed to query Study Agent");
+}
+
+export async function getStudyAgentMemorySummary(
+  apiClient: ApiClient,
+): Promise<StudyAgentMemorySummary> {
+  const response = await fetch(`${API_BASE}/api/study-agent/memories/summary`, {
+    headers: apiClient.headers(),
+  });
+  return parseJson<StudyAgentMemorySummary>(
+    response,
+    "Failed to load Study Agent memory summary",
+  );
+}
+
+export async function deleteStudyAgentMemory(
+  apiClient: ApiClient,
+  memoryId: string,
+): Promise<{ id: string; status: string }> {
+  const response = await fetch(`${API_BASE}/api/study-agent/memories/${memoryId}`, {
+    method: "DELETE",
+    headers: apiClient.headers(),
+  });
+  return parseJson<{ id: string; status: string }>(
+    response,
+    "Failed to delete Study Agent memory",
+  );
 }
 
 export async function submitFeedback(

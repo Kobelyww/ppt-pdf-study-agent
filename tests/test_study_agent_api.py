@@ -16,6 +16,7 @@ from src.db.models import (
     DocumentArtifactRecord,
     DocumentChunkRecord,
     ReviewTaskRecord,
+    StudyAgentMemoryRecord,
     UserRecord,
 )
 from src.security.auth import hash_password
@@ -585,6 +586,114 @@ def test_study_agent_query_response_does_not_expose_raw_audit_metadata_policy():
         assert value not in serialized
 
 
+def test_memory_summary_endpoint_is_owner_scoped(tmp_path: Path):
+    client, _orchestrator, Session, _document_service = _client(tmp_path)
+    headers = _login(client)
+    with Session() as session:
+        session.add_all(
+            [
+                StudyAgentMemoryRecord(
+                    id="memory-user-1",
+                    owner_id="user-1",
+                    scope_type="user",
+                    scope_id="user-1",
+                    category="user_preference",
+                    key="answer_style",
+                    value_json={"value": "concise"},
+                    confidence=1.0,
+                    source_type="explicit_preference",
+                    source_id="source-user-1",
+                    privacy_level="safe_metadata",
+                ),
+                StudyAgentMemoryRecord(
+                    id="memory-user-2",
+                    owner_id="user-2",
+                    scope_type="user",
+                    scope_id="user-2",
+                    category="user_preference",
+                    key="answer_style",
+                    value_json={"value": "detailed"},
+                    confidence=1.0,
+                    source_type="explicit_preference",
+                    source_id="source-user-2",
+                    privacy_level="safe_metadata",
+                ),
+            ]
+        )
+        session.commit()
+
+    response = client.get("/api/study-agent/memories/summary", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "preferences": {"answer_style": "concise"},
+        "review_reason_counts": {},
+        "memory_record_count": 1,
+    }
+    serialized = json.dumps(response.json(), ensure_ascii=False)
+    assert "detailed" not in serialized
+    assert "user-2" not in serialized
+
+
+def test_delete_memory_endpoint_is_owner_scoped(tmp_path: Path):
+    client, _orchestrator, Session, _document_service = _client(tmp_path)
+    headers = _login(client)
+    with Session() as session:
+        session.add_all(
+            [
+                StudyAgentMemoryRecord(
+                    id="memory-owned",
+                    owner_id="user-1",
+                    scope_type="user",
+                    scope_id="user-1",
+                    category="user_preference",
+                    key="answer_style",
+                    value_json={"value": "concise"},
+                    confidence=1.0,
+                    source_type="explicit_preference",
+                    source_id="source-owned",
+                    privacy_level="safe_metadata",
+                ),
+                StudyAgentMemoryRecord(
+                    id="memory-other",
+                    owner_id="user-2",
+                    scope_type="user",
+                    scope_id="user-2",
+                    category="user_preference",
+                    key="answer_style",
+                    value_json={"value": "detailed"},
+                    confidence=1.0,
+                    source_type="explicit_preference",
+                    source_id="source-other",
+                    privacy_level="safe_metadata",
+                ),
+            ]
+        )
+        session.commit()
+
+    other_delete = client.delete(
+        "/api/study-agent/memories/memory-other",
+        headers=headers,
+    )
+    own_delete = client.delete(
+        "/api/study-agent/memories/memory-owned",
+        headers=headers,
+    )
+    summary = client.get("/api/study-agent/memories/summary", headers=headers)
+
+    assert other_delete.status_code == 404
+    assert own_delete.status_code == 200
+    assert own_delete.json() == {"id": "memory-owned", "status": "deleted"}
+    assert summary.status_code == 200
+    assert summary.json() == {
+        "preferences": {},
+        "review_reason_counts": {},
+        "memory_record_count": 0,
+    }
+    with Session() as session:
+        assert session.get(StudyAgentMemoryRecord, "memory-other") is not None
+
+
 def test_study_agent_query_returns_safe_workflow_payload(tmp_path: Path):
     workflow_id = new_workflow_id()
     Session = _session_factory()
@@ -903,6 +1012,122 @@ def test_review_tasks_list_sanitizes_persisted_task_metadata(tmp_path: Path):
         "token",
         "nested",
         "custom_lowercase_reason",
+    ]:
+        assert forbidden not in serialized
+
+
+def test_review_decision_creates_safe_review_outcome_memory(tmp_path: Path):
+    workflow_id = new_workflow_id()
+    Session = _session_factory()
+    app = create_app(
+        session_factory=Session,
+        secret_key="test-secret",
+        allow_dev_user_header=False,
+        study_agent_orchestrator=WorkflowStudyAgentOrchestrator(
+            workflow_id,
+            needs_review=True,
+        ),
+    )
+    client = TestClient(app)
+    headers = _login(client)
+
+    created = client.post(
+        "/api/study-agent/query",
+        json={"query": "什么是导数？"},
+        headers={**headers, "x-request-id": "req-study-memory-review"},
+    )
+    assert created.status_code == 200
+    review_task_id = created.json()["review_task"]["id"]
+    decided = client.post(
+        f"/api/review-tasks/{review_task_id}/decision",
+        json={"decision": "resolved", "comment": "raw reviewer comment sk-secret-token"},
+        headers={**headers, "x-request-id": "req-study-memory-decision"},
+    )
+    summary = client.get("/api/study-agent/memories/summary", headers=headers)
+
+    assert decided.status_code == 200
+    assert summary.status_code == 200
+    assert summary.json()["review_reason_counts"] == {"low_confidence": 1}
+    with Session() as session:
+        memory = session.query(StudyAgentMemoryRecord).one()
+    assert memory.owner_id == "user-1"
+    assert memory.category == "review_outcome"
+    assert memory.scope_id == workflow_id
+    assert memory.key == review_task_id
+    assert memory.value_json == {
+        "decision": "resolved",
+        "reasons": ["low_confidence"],
+        "metrics": {"chunk_count": 1, "confidence": 0.42, "source_count": 1},
+    }
+    serialized = json.dumps(
+        {
+            "decision_response": decided.json(),
+            "summary": summary.json(),
+            "memory_value": memory.value_json,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    for forbidden in [
+        "什么是导数",
+        "导数原文",
+        "hidden prompt",
+        "sk-secret-token",
+        "raw reviewer comment",
+        "query",
+        "chunk_content",
+        "prompt",
+        "token",
+        "comment",
+        "input_summary",
+        "output_summary",
+    ]:
+        assert forbidden not in serialized
+
+
+def test_review_decision_without_safe_reason_does_not_fail_or_write_memory(
+    tmp_path: Path,
+):
+    client, _orchestrator, Session, _document_service = _client(tmp_path)
+    headers = _login(client)
+    with Session() as session:
+        session.add(
+            ReviewTaskRecord(
+                id="review-legacy-unsafe",
+                owner_id="user-1",
+                target_type="study_agent_workflow",
+                target_id="workflow-legacy-unsafe",
+                status="open",
+                reason="needs_review",
+                task_metadata={
+                    "workflow_id": "workflow-legacy-unsafe",
+                    "review_reasons": ["custom_lowercase_reason"],
+                    "query": "什么是导数？",
+                    "content": "导数原文",
+                    "prompt": "hidden prompt",
+                    "token": "sk-secret-token",
+                },
+            )
+        )
+        session.commit()
+
+    response = client.post(
+        "/api/review-tasks/review-legacy-unsafe/decision",
+        json={"decision": "resolved", "comment": "raw reviewer comment"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    with Session() as session:
+        assert session.query(StudyAgentMemoryRecord).count() == 0
+    serialized = json.dumps(response.json(), ensure_ascii=False)
+    for forbidden in [
+        "custom_lowercase_reason",
+        "什么是导数",
+        "导数原文",
+        "hidden prompt",
+        "sk-secret-token",
+        "raw reviewer comment",
     ]:
         assert forbidden not in serialized
 
