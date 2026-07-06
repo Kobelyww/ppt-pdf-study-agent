@@ -57,6 +57,19 @@ _POLICY_REASONS = {
     "persisted chunks are required for advanced routing",
     "readiness snapshot is unavailable",
 }
+_SKILL_NAMES = {
+    "concept_explanation",
+    "practice_question",
+    "outline_fragment",
+    "concept_relation",
+    "multi_document_synthesis",
+}
+_SKILL_VERSIONS = {"v1"}
+_SKILL_TARGETS = {"answer", "question", "outline_fragment"}
+_SKILL_RETRIEVAL_MODES = {"simple_rag", "graph_rag_lite", "agentic_rag"}
+_SKILL_BUDGETS = {"low", "balanced", "high"}
+_REVIEW_GATE_PROFILES = {"standard", "strict"}
+_MEMORY_LABELS = {"user_preference", "study_state", "review_outcome", "skill_performance"}
 
 
 class StudyAgentTraceService:
@@ -78,6 +91,9 @@ class StudyAgentTraceService:
         }
         if safe_policy is not None:
             trace_metadata["policy"] = safe_policy
+        safe_skill = safe_skill_metadata(result.audit_metadata.get("skill"))
+        if safe_skill is not None:
+            trace_metadata["skill"] = safe_skill
         workflow = sanitize_workflow_payload(result.audit_metadata.get("workflow"))
         if workflow is not None:
             trace_metadata["workflow"] = workflow
@@ -174,6 +190,38 @@ def safe_policy_metadata(policy: Any) -> dict[str, Any] | None:
     return safe or None
 
 
+def safe_skill_metadata(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+
+    safe: dict[str, Any] = {}
+    skill_name = _allowed_string(value.get("skill_name"), _SKILL_NAMES)
+    if skill_name is not None:
+        safe["skill_name"] = skill_name
+    skill_version = _allowed_string(value.get("skill_version"), _SKILL_VERSIONS)
+    if skill_version is not None:
+        safe["skill_version"] = skill_version
+    supported_targets = _safe_label_list(value.get("supported_targets"), _SKILL_TARGETS)
+    if supported_targets:
+        safe["supported_targets"] = supported_targets
+    modes = _safe_label_list(value.get("allowed_retrieval_modes"), _SKILL_RETRIEVAL_MODES)
+    if modes:
+        safe["allowed_retrieval_modes"] = modes
+    default_budget = _allowed_string(value.get("default_budget"), _SKILL_BUDGETS)
+    if default_budget is not None:
+        safe["default_budget"] = default_budget
+    profile = _allowed_string(value.get("review_gate_profile"), _REVIEW_GATE_PROFILES)
+    if profile is not None:
+        safe["review_gate_profile"] = profile
+    memory_inputs = _safe_label_list(value.get("memory_inputs"), _MEMORY_LABELS)
+    if memory_inputs:
+        safe["memory_inputs"] = memory_inputs
+    memory_outputs = _safe_label_list(value.get("memory_outputs"), _MEMORY_LABELS)
+    if memory_outputs:
+        safe["memory_outputs"] = memory_outputs
+    return safe or None
+
+
 def _safe_policy_value(key: str, value: Any) -> Any:
     if key in {"selected_mode", "router_mode", "effective_mode"}:
         return _allowed_string(value, _RETRIEVAL_MODES)
@@ -230,6 +278,13 @@ def _safe_fallback_chain(value: Any) -> list[str] | None:
     return modes or None
 
 
+def _safe_label_list(value: Any, allowed: set[str]) -> list[str] | None:
+    if not isinstance(value, list):
+        return None
+    labels = [item for item in value if isinstance(item, str) and item in allowed]
+    return labels or None
+
+
 def _safe_int(value: Any) -> int:
     try:
         return int(value or 0)
@@ -262,6 +317,9 @@ def _trace_payload(
     policy = safe_policy_metadata((record.trace_metadata or {}).get("policy"))
     if policy is not None:
         payload["policy"] = policy
+    skill = safe_skill_metadata((record.trace_metadata or {}).get("skill"))
+    if skill is not None:
+        payload["skill"] = skill
     workflow = sanitize_workflow_payload((record.trace_metadata or {}).get("workflow"))
     if workflow is not None:
         payload["workflow"] = workflow

@@ -105,6 +105,8 @@ export interface StudyAgentQueryPayload {
   preferred_mode?: StudyRetrievalMode;
   budget?: StudyBudget;
   expected_terms?: string[];
+  skill_name?: string;
+  skill_version?: string;
 }
 
 export interface StudyAgentChunk {
@@ -148,6 +150,7 @@ export interface StudyAgentTraceSummary {
   answer_term_recall: number;
   needs_review: boolean;
   latency_ms: number;
+  skill?: StudyAgentSkillDiagnostic | null;
   workflow?: StudyAgentWorkflowDiagnostic | null;
 }
 
@@ -160,6 +163,20 @@ export interface StudyAgentPolicyDiagnostic {
   readiness_status?: string | null;
   blocked_reason?: string | null;
   experiment_enabled?: boolean | null;
+}
+
+export interface StudyAgentSkillDiagnostic {
+  skill_name?: string | null;
+  skill_version?: string | null;
+  review_gate_profile?: string | null;
+}
+
+export interface StudyAgentSkillSummary extends StudyAgentSkillDiagnostic {
+  supported_targets?: StudyTarget[];
+  allowed_retrieval_modes?: StudyRetrievalMode[];
+  default_budget?: StudyBudget | null;
+  memory_inputs?: string[];
+  memory_outputs?: string[];
 }
 
 export interface StudyAgentReviewTaskDiagnostic {
@@ -222,6 +239,7 @@ export interface StudyAgentResult {
   };
   trace?: StudyAgentTraceSummary;
   policy?: StudyAgentPolicyDiagnostic | null;
+  skill?: StudyAgentSkillDiagnostic | null;
   workflow?: StudyAgentWorkflowDiagnostic | null;
   review_task?: StudyAgentReviewTaskDiagnostic | null;
   audit_metadata?: Record<string, unknown>;
@@ -382,6 +400,15 @@ export async function queryStudyAgent(
     body: JSON.stringify(payload),
   });
   return parseJson<StudyAgentResult>(response, "Failed to query Study Agent");
+}
+
+export async function listStudyAgentSkills(
+  apiClient: ApiClient,
+): Promise<StudyAgentSkillSummary[]> {
+  const response = await fetch(`${API_BASE}/api/study-agent/skills`, {
+    headers: apiClient.headers(),
+  });
+  return parseJson<StudyAgentSkillSummary[]>(response, "Failed to load Study Agent skills");
 }
 
 export async function getStudyAgentMemorySummary(

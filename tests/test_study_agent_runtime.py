@@ -437,6 +437,16 @@ async def test_runtime_attaches_completed_workflow_timeline():
     )
 
     workflow = result.audit_metadata["workflow"]
+    assert result.audit_metadata["skill"] == {
+        "skill_name": "concept_explanation",
+        "skill_version": "v1",
+        "supported_targets": ["answer"],
+        "allowed_retrieval_modes": ["simple_rag", "graph_rag_lite"],
+        "default_budget": "balanced",
+        "review_gate_profile": "standard",
+        "memory_inputs": ["user_preference", "study_state"],
+        "memory_outputs": ["skill_performance"],
+    }
     assert workflow["workflow_id"].startswith("workflow-")
     assert workflow["status"] in {"completed", "completed_with_fallback"}
     assert workflow["current_stage"] == "trace"
@@ -444,6 +454,7 @@ async def test_runtime_attaches_completed_workflow_timeline():
     assert [stage["stage"] for stage in workflow["stages"]] == [
         "intake",
         "plan",
+        "skill_select",
         "retrieve",
         "generate",
         "verify",
@@ -452,9 +463,61 @@ async def test_runtime_attaches_completed_workflow_timeline():
     ]
     assert workflow["stages"][0]["output_summary"]["document_count"] == 1
     assert workflow["stages"][1]["output_summary"]["selected_mode"] == "simple_rag"
-    assert workflow["stages"][2]["output_summary"]["chunk_count"] == 1
-    assert workflow["stages"][3]["output_summary"]["citation_count"] == 1
-    assert workflow["stages"][4]["output_summary"]["confidence"] >= 0
+    skill_stage = workflow["stages"][2]
+    assert skill_stage["output_summary"] == {
+        "skill_name": "concept_explanation",
+        "skill_version": "v1",
+        "review_gate_profile": "standard",
+    }
+    assert workflow["stages"][3]["output_summary"]["chunk_count"] == 1
+    assert workflow["stages"][4]["output_summary"]["citation_count"] == 1
+    assert workflow["stages"][5]["output_summary"]["confidence"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_runtime_rejects_unsupported_requested_skill_version():
+    Session = _session_factory()
+    _insert_ready_document_with_artifact(Session)
+    runtime = StudyAgentRuntimeService(
+        session_factory=Session,
+        chunker=StudyDocumentChunker(max_chars=200, overlap_chars=20),
+    )
+
+    with pytest.raises(ValueError, match="unsupported skill version"):
+        await runtime.run(
+            {
+                "query": "What do derivatives measure?",
+                "target": "answer",
+                "document_ids": ["doc-study"],
+                "skill_name": "concept_explanation",
+                "skill_version": "v2",
+                "authenticated_user_id": "user-1",
+                "request_id": "req-runtime-skill-version",
+            }
+        )
+
+
+@pytest.mark.asyncio
+async def test_runtime_rejects_requested_skill_that_does_not_support_target():
+    Session = _session_factory()
+    _insert_ready_document_with_artifact(Session)
+    runtime = StudyAgentRuntimeService(
+        session_factory=Session,
+        chunker=StudyDocumentChunker(max_chars=200, overlap_chars=20),
+    )
+
+    with pytest.raises(ValueError, match="does not support target"):
+        await runtime.run(
+            {
+                "query": "Write a practice question.",
+                "target": "question",
+                "document_ids": ["doc-study"],
+                "skill_name": "concept_explanation",
+                "skill_version": "v1",
+                "authenticated_user_id": "user-1",
+                "request_id": "req-runtime-skill-target",
+            }
+        )
 
 
 @pytest.mark.asyncio

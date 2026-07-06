@@ -15,7 +15,12 @@ from src.services.study_agent_documents import StudyAgentDocumentError
 from src.services.study_agent_index import StudyDocumentIndexService
 from src.services.study_agent_memory import StudyAgentMemoryService
 from src.services.study_agent_runtime import StudyAgentRuntimeService
-from src.services.study_agent_trace import StudyAgentTraceService, safe_policy_metadata
+from src.services.study_agent_skills import StudySkillRegistry
+from src.services.study_agent_trace import (
+    StudyAgentTraceService,
+    safe_policy_metadata,
+    safe_skill_metadata,
+)
 from src.services.study_agent_review_tasks import StudyAgentReviewTaskService
 from src.services.study_agent_workflow import sanitize_workflow_payload
 
@@ -27,6 +32,8 @@ class StudyAgentQueryRequest(BaseModel):
     preferred_mode: str | None = None
     budget: str | None = None
     expected_terms: list[str] | None = None
+    skill_name: str | None = None
+    skill_version: str | None = None
 
     @field_validator("query")
     @classmethod
@@ -83,6 +90,9 @@ async def query_study_agent(
     policy = safe_policy_metadata(audit_metadata.get("policy"))
     if policy is not None:
         response_payload["policy"] = policy
+    skill = safe_skill_metadata(audit_metadata.get("skill"))
+    if skill is not None:
+        response_payload["skill"] = skill
     workflow = sanitize_workflow_payload(audit_metadata.get("workflow"))
     if workflow is not None:
         response_payload["workflow"] = workflow
@@ -99,6 +109,11 @@ async def query_study_agent(
     if trace_payload is not None:
         response_payload["trace"] = trace_payload
     return response_payload
+
+
+@router.get("/skills")
+def list_study_agent_skills(_request: Request) -> list[dict[str, Any]]:
+    return StudySkillRegistry().list_skills()
 
 
 @router.get("/traces/{trace_id}")
@@ -276,6 +291,9 @@ def _trace_payload_without_persistence(
     policy = safe_policy_metadata(audit_metadata.get("policy"))
     if policy is not None:
         trace_payload["policy"] = policy
+    skill = safe_skill_metadata(audit_metadata.get("skill"))
+    if skill is not None:
+        trace_payload["skill"] = skill
     workflow = sanitize_workflow_payload(audit_metadata.get("workflow"))
     if workflow is not None:
         trace_payload["workflow"] = workflow

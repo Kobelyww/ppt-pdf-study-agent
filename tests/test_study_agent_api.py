@@ -148,6 +148,66 @@ class SensitivePolicyStudyAgentOrchestrator:
 
 
 @dataclass
+class SensitiveSkillStudyAgentOrchestrator:
+    async def run(self, payload: dict) -> StudyAgentResult:
+        request = StudyRequest(query=payload["query"], target=StudyTarget.ANSWER)
+        evidence = EvidenceBundle(
+            mode=RetrievalMode.SIMPLE,
+            chunks=(Chunk(content="导数描述函数的变化率。", source="calculus:derivative"),),
+            sources=("calculus:derivative",),
+            concept_ids=("kp-derivative",),
+            confidence=0.8,
+            reason="simple token-overlap retrieval",
+        )
+        return StudyAgentResult(
+            request=request,
+            plan=StudyPlan(
+                mode=RetrievalMode.SIMPLE,
+                reason="definition or direct lookup query",
+                steps=("retrieve_chunks",),
+                estimated_cost="low",
+            ),
+            evidence=evidence,
+            draft=StudyDraft(
+                target=StudyTarget.ANSWER,
+                content="导数描述函数的变化率。",
+                citations=("calculus:derivative",),
+                used_chunk_count=1,
+            ),
+            verification=StudyVerification(
+                passed=True,
+                needs_review=False,
+                confidence=0.8,
+                issues=(),
+                source_recall=1.0,
+                answer_term_recall=1.0,
+            ),
+            audit_metadata={
+                "mode": "simple_rag",
+                "target": "answer",
+                "needs_review": False,
+                "source_count": 1,
+                "chunk_count": 1,
+                "skill": {
+                    "skill_name": "concept_explanation",
+                    "skill_version": "v1",
+                    "supported_targets": ["answer"],
+                    "allowed_retrieval_modes": ["simple_rag", "graph_rag_lite"],
+                    "default_budget": "balanced",
+                    "review_gate_profile": "standard",
+                    "memory_inputs": ["user_preference", "study_state", "raw prompt"],
+                    "memory_outputs": ["skill_performance", "chunk content"],
+                    "query": "什么是导数？",
+                    "generated_answer": "导数描述函数的变化率。",
+                    "chunk_content": "函数变化率原文片段",
+                    "prompt": "hidden prompt",
+                    "token": "sk-secret-token",
+                },
+            },
+        )
+
+
+@dataclass
 class WorkflowStudyAgentOrchestrator:
     workflow_id: str
     needs_review: bool = False
@@ -527,6 +587,94 @@ def test_study_agent_query_returns_trace_payload(tmp_path: Path):
             "request_id": "req-study-1",
         }
     ]
+
+
+def test_study_agent_skills_endpoint_returns_safe_registry(tmp_path: Path):
+    client, _orchestrator, _Session, _document_service = _client(tmp_path)
+    headers = _login(client)
+
+    response = client.get("/api/study-agent/skills", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload[0] == {
+        "skill_name": "concept_explanation",
+        "skill_version": "v1",
+        "supported_targets": ["answer"],
+        "allowed_retrieval_modes": ["simple_rag", "graph_rag_lite"],
+        "default_budget": "balanced",
+        "review_gate_profile": "standard",
+        "memory_inputs": ["user_preference", "study_state"],
+        "memory_outputs": ["skill_performance"],
+    }
+    serialized = json.dumps(payload, ensure_ascii=False)
+    for forbidden in ["query", "chunk_content", "prompt", "token", "secret"]:
+        assert forbidden not in serialized.lower()
+
+
+def test_study_agent_query_response_includes_safe_skill_payload():
+    app = create_app(
+        secret_key="test-secret",
+        allow_dev_user_header=True,
+        study_agent_orchestrator=SensitiveSkillStudyAgentOrchestrator(),
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/study-agent/query",
+        json={"query": "什么是导数？"},
+        headers={"x-user-id": "user-1", "x-request-id": "req-study-sensitive-skill"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["skill"] == {
+        "skill_name": "concept_explanation",
+        "skill_version": "v1",
+        "supported_targets": ["answer"],
+        "allowed_retrieval_modes": ["simple_rag", "graph_rag_lite"],
+        "default_budget": "balanced",
+        "review_gate_profile": "standard",
+        "memory_inputs": ["user_preference", "study_state"],
+        "memory_outputs": ["skill_performance"],
+    }
+    serialized = response.text
+    serialized_skill = json.dumps(payload["skill"], ensure_ascii=False)
+    for value in [
+        "函数变化率原文片段",
+        "hidden prompt",
+        "sk-secret-token",
+    ]:
+        assert value not in serialized
+    for key in ["generated_answer", "chunk_content", "prompt", "token"]:
+        assert key not in serialized_skill
+
+
+def test_study_agent_query_unsupported_skill_version_maps_to_422(tmp_path: Path):
+    Session = _session_factory()
+    app = create_app(
+        session_factory=Session,
+        secret_key="test-secret",
+        allow_dev_user_header=False,
+    )
+    client = TestClient(app)
+    headers = _login(client)
+    _insert_ready_document_for_api(Session)
+
+    response = client.post(
+        "/api/study-agent/query",
+        json={
+            "query": "What do derivatives measure?",
+            "target": "answer",
+            "document_ids": ["doc-api"],
+            "skill_name": "concept_explanation",
+            "skill_version": "v2",
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 422
+    assert "unsupported skill version" in response.json()["detail"]
 
 
 def test_study_agent_query_audit_has_not_applied_policy_for_injected_orchestrator(

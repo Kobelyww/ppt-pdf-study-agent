@@ -30,6 +30,7 @@ from src.services.study_agent_index import (
     StudyDocumentIndexService,
     persisted_chunk_set_is_complete,
 )
+from src.services.study_agent_skills import StudySkillRegistry
 from src.services.study_agent_workflow import (
     ReviewGate,
     WorkflowStageName,
@@ -56,6 +57,7 @@ class StudyAgentRuntimeService:
         verifier: StudyVerifier | None = None,
         router: RAGStrategyRouter | None = None,
         route_policy: RAGRoutePolicyService | None = None,
+        skill_registry: StudySkillRegistry | None = None,
         readiness_provider: Callable[[], RAGReadinessSnapshot | None] | None = None,
         top_k: int = 5,
     ) -> None:
@@ -73,6 +75,7 @@ class StudyAgentRuntimeService:
         self.verifier = verifier
         self.router = router or RAGStrategyRouter()
         self.route_policy = route_policy or RAGRoutePolicyService(RAGRoutePolicyConfig())
+        self.skill_registry = skill_registry or StudySkillRegistry()
         self.readiness_provider = readiness_provider or (lambda: None)
         self.top_k = top_k
 
@@ -243,10 +246,26 @@ class StudyAgentRuntimeService:
             },
         )
         safe_policy = policy_decision.to_safe_dict()
+        skill = self.skill_registry.select_skill(
+            target=request.target,
+            category=policy_decision.category,
+            requested_skill=request.skill_name,
+            requested_version=request.skill_version,
+        )
+        safe_skill = skill.to_safe_dict()
+        add_stage(
+            WorkflowStageName.SKILL_SELECT,
+            output_summary={
+                "skill_name": skill.skill_name,
+                "skill_version": skill.version,
+                "review_gate_profile": skill.review_gate_profile,
+            },
+        )
         orchestrator_payload = {
             **payload,
             "preferred_mode": policy_decision.selected_mode.value,
             "policy_decision": safe_policy,
+            "skill": safe_skill,
         }
 
         rag_service = RAGService()
@@ -341,6 +360,7 @@ class StudyAgentRuntimeService:
         result.audit_metadata["fallback_reason"] = fallback_reason
         result.audit_metadata["index_statuses"] = index_statuses
         result.audit_metadata["policy"] = safe_policy
+        result.audit_metadata["skill"] = safe_skill
         result.audit_metadata["latency_ms"] = round((perf_counter() - started_at) * 1000, 3)
         result.audit_metadata["workflow"] = workflow
         return result

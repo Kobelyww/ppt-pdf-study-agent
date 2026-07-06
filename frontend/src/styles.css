@@ -816,6 +816,7 @@ dd {
 }
 
 .study-agent-policy,
+.study-agent-skill,
 .study-agent-review-task {
   display: flex;
   flex-wrap: wrap;
@@ -827,6 +828,7 @@ dd {
 }
 
 .study-agent-policy span,
+.study-agent-skill span,
 .study-agent-review-task span {
   min-width: 0;
   padding: 6px 9px;
@@ -837,6 +839,7 @@ dd {
 }
 
 .study-agent-policy strong,
+.study-agent-skill strong,
 .study-agent-review-task strong {
   color: #18212f;
   font-weight: 700;

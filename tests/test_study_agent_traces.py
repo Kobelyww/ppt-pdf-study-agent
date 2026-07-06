@@ -19,7 +19,7 @@ from src.services.study_agent import (
     StudyVerification,
 )
 from src.services.study_agent_trace import StudyAgentTraceService
-from src.services.study_agent_trace import safe_policy_metadata
+from src.services.study_agent_trace import safe_policy_metadata, safe_skill_metadata
 from src.services.study_agent_workflow import new_workflow_id
 
 
@@ -346,6 +346,84 @@ def test_trace_persists_safe_workflow_payload():
         assert value not in serialized
     for key in ["query", "chunk_content", "source_snippets", "prompt", "token"]:
         assert key not in serialized
+
+
+def test_trace_persists_and_returns_safe_skill_metadata():
+    SessionFactory = _session_factory()
+    service = StudyAgentTraceService(SessionFactory)
+    result = _study_result()
+    result.audit_metadata["skill"] = {
+        "skill_name": "concept_explanation",
+        "skill_version": "v1",
+        "supported_targets": ["answer"],
+        "allowed_retrieval_modes": ["simple_rag", "graph_rag_lite"],
+        "default_budget": "balanced",
+        "review_gate_profile": "standard",
+        "memory_inputs": ["user_preference", "study_state"],
+        "memory_outputs": ["skill_performance"],
+        "query": "什么是导数？",
+        "generated_answer": "导数描述函数变化率。",
+        "chunk_content": "函数变化率原文片段",
+        "prompt": "hidden prompt",
+        "token": "sk-secret-token",
+    }
+
+    payload = service.record_success(
+        owner_id="owner-1",
+        request_id="req-skill",
+        result=result,
+        latency_ms=18.0,
+        index_statuses={},
+    )
+    trace = service.get_trace("owner-1", payload["trace_id"])
+
+    expected_skill = {
+        "skill_name": "concept_explanation",
+        "skill_version": "v1",
+        "supported_targets": ["answer"],
+        "allowed_retrieval_modes": ["simple_rag", "graph_rag_lite"],
+        "default_budget": "balanced",
+        "review_gate_profile": "standard",
+        "memory_inputs": ["user_preference", "study_state"],
+        "memory_outputs": ["skill_performance"],
+    }
+    assert payload["skill"] == expected_skill
+    assert trace is not None
+    assert trace["skill"] == expected_skill
+
+    with SessionFactory() as session:
+        record = session.scalar(select(StudyAgentTraceRecord))
+    serialized_record = json.dumps(record.trace_metadata, ensure_ascii=False, sort_keys=True)
+    for value in [
+        "什么是导数？",
+        "导数描述函数变化率。",
+        "函数变化率原文片段",
+        "hidden prompt",
+        "sk-secret-token",
+    ]:
+        assert value not in serialized_record
+    for key in ["query", "generated_answer", "chunk_content", "prompt", "token"]:
+        assert key not in serialized_record
+
+
+def test_skill_sanitizer_drops_raw_or_unknown_skill_payload_fields():
+    assert safe_skill_metadata(
+        {
+            "skill_name": "concept_explanation",
+            "skill_version": "v1",
+            "review_gate_profile": "standard",
+            "query": "什么是导数？",
+            "token": "sk-secret-token",
+            "memory_inputs": ["study_state", "raw prompt"],
+            "memory_outputs": ["skill_performance", "chunk content"],
+        }
+    ) == {
+        "skill_name": "concept_explanation",
+        "skill_version": "v1",
+        "review_gate_profile": "standard",
+        "memory_inputs": ["study_state"],
+        "memory_outputs": ["skill_performance"],
+    }
 
 
 def test_get_trace_returns_workflow_only_to_owner():

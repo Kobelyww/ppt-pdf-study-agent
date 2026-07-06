@@ -35,6 +35,8 @@ class StudyRequest:
     expected_terms: tuple[str, ...] = ()
     authenticated_user_id: str | None = None
     request_id: str | None = None
+    skill_name: str | None = None
+    skill_version: str | None = None
 
 
 @dataclass(frozen=True)
@@ -475,6 +477,9 @@ class StudyAgentOrchestrator:
         policy_decision = payload.get("policy_decision")
         if isinstance(policy_decision, dict):
             audit_metadata["policy"] = policy_decision
+        skill_metadata = _safe_skill_payload(payload.get("skill"))
+        if skill_metadata is not None:
+            audit_metadata["skill"] = skill_metadata
         return StudyAgentResult(
             request=request,
             plan=plan,
@@ -556,6 +561,8 @@ def normalize_study_request(payload: dict[str, Any]) -> StudyRequest:
         expected_terms=_dedupe_nonempty(payload.get("expected_terms") or []),
         authenticated_user_id=_optional_nonempty(payload.get("authenticated_user_id")),
         request_id=_optional_nonempty(payload.get("request_id")),
+        skill_name=_optional_nonempty(payload.get("skill_name")),
+        skill_version=_optional_nonempty(payload.get("skill_version")),
     )
 
 
@@ -580,6 +587,72 @@ def _optional_nonempty(value: Any) -> str | None:
         return None
     normalized = str(value).strip()
     return normalized or None
+
+
+_SAFE_SKILL_NAMES = {
+    "concept_explanation",
+    "practice_question",
+    "outline_fragment",
+    "concept_relation",
+    "multi_document_synthesis",
+}
+_SAFE_SKILL_VERSIONS = {"v1"}
+_SAFE_REVIEW_GATE_PROFILES = {"standard", "strict"}
+_SAFE_MEMORY_LABELS = {"user_preference", "study_state", "review_outcome", "skill_performance"}
+_SAFE_DEFAULT_BUDGETS = {budget.value for budget in StudyBudget}
+_SAFE_SKILL_TARGETS = {target.value for target in StudyTarget}
+_SAFE_SKILL_RETRIEVAL_MODES = {mode.value for mode in RetrievalMode}
+
+
+def _safe_skill_payload(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+
+    safe: dict[str, Any] = {}
+    skill_name = _allowed_label(value.get("skill_name"), _SAFE_SKILL_NAMES)
+    if skill_name is not None:
+        safe["skill_name"] = skill_name
+    skill_version = _allowed_label(value.get("skill_version"), _SAFE_SKILL_VERSIONS)
+    if skill_version is not None:
+        safe["skill_version"] = skill_version
+    supported_targets = _allowed_label_list(
+        value.get("supported_targets"),
+        _SAFE_SKILL_TARGETS,
+    )
+    if supported_targets:
+        safe["supported_targets"] = supported_targets
+    modes = _allowed_label_list(
+        value.get("allowed_retrieval_modes"),
+        _SAFE_SKILL_RETRIEVAL_MODES,
+    )
+    if modes:
+        safe["allowed_retrieval_modes"] = modes
+    default_budget = _allowed_label(value.get("default_budget"), _SAFE_DEFAULT_BUDGETS)
+    if default_budget is not None:
+        safe["default_budget"] = default_budget
+    profile = _allowed_label(value.get("review_gate_profile"), _SAFE_REVIEW_GATE_PROFILES)
+    if profile is not None:
+        safe["review_gate_profile"] = profile
+    memory_inputs = _allowed_label_list(value.get("memory_inputs"), _SAFE_MEMORY_LABELS)
+    if memory_inputs:
+        safe["memory_inputs"] = memory_inputs
+    memory_outputs = _allowed_label_list(value.get("memory_outputs"), _SAFE_MEMORY_LABELS)
+    if memory_outputs:
+        safe["memory_outputs"] = memory_outputs
+    return safe or None
+
+
+def _allowed_label(value: Any, allowed: set[str]) -> str | None:
+    if not isinstance(value, str):
+        return None
+    return value if value in allowed else None
+
+
+def _allowed_label_list(value: Any, allowed: set[str]) -> list[str] | None:
+    if not isinstance(value, list):
+        return None
+    labels = [item for item in value if isinstance(item, str) and item in allowed]
+    return labels or None
 
 
 def _unique(values) -> tuple[str, ...]:

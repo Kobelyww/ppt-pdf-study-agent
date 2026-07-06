@@ -20,10 +20,12 @@ from src.services.study_agent import (
 class WorkflowStageName(str, Enum):
     INTAKE = "intake"
     PLAN = "plan"
+    SKILL_SELECT = "skill_select"
     RETRIEVE = "retrieve"
     GENERATE = "generate"
     VERIFY = "verify"
     REVIEW_GATE = "review_gate"
+    MEMORY_UPDATE = "memory_update"
     TRACE = "trace"
 
 
@@ -103,6 +105,15 @@ _SAFE_STRING_VALUES = {
     },
     "estimated_cost": {"low", "medium", "balanced", "high"},
     "chunk_source": {"persisted", "fallback"},
+    "skill_name": {
+        "concept_explanation",
+        "practice_question",
+        "outline_fragment",
+        "concept_relation",
+        "multi_document_synthesis",
+    },
+    "skill_version": {"v1"},
+    "review_gate_profile": {"standard", "strict"},
 }
 
 _SAFE_INT_KEYS = {
@@ -115,6 +126,7 @@ _SAFE_INT_KEYS = {
     "stage_count",
     "used_chunk_count",
     "citation_count",
+    "memory_record_count",
 }
 _SAFE_FLOAT_KEYS = {
     "confidence",

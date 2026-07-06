@@ -127,6 +127,25 @@ function ReviewTaskStatus({ task }: { task: StudyAgentResult["review_task"] }) {
   );
 }
 
+function SkillStatus({ skill }: { skill: StudyAgentResult["skill"] }) {
+  if (!skill?.skill_name) return null;
+  return (
+    <div className="study-agent-skill" aria-label="Study Agent skill">
+      <span>
+        <strong>Skill</strong> {skill.skill_name}
+      </span>
+      <span>
+        <strong>Version</strong> {skill.skill_version ?? "unknown"}
+      </span>
+      {skill.review_gate_profile ? (
+        <span>
+          <strong>Review</strong> {skill.review_gate_profile}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 function StudyAgentPanel({
   apiClient,
   documents,
@@ -423,6 +442,7 @@ function StudyAgentPanel({
               ) : null}
             </div>
           ) : null}
+          <SkillStatus skill={result.skill ?? result.trace?.skill} />
           {result.trace?.fallback_reason ? (
             <div className="warning-banner compact" role="status">
               Evidence index fallback: {result.trace.fallback_reason}
