@@ -137,11 +137,6 @@ function SkillStatus({ skill }: { skill: StudyAgentResult["skill"] }) {
       <span>
         <strong>Version</strong> {skill.skill_version ?? "unknown"}
       </span>
-      {skill.review_gate_profile ? (
-        <span>
-          <strong>Review</strong> {skill.review_gate_profile}
-        </span>
-      ) : null}
     </div>
   );
 }
