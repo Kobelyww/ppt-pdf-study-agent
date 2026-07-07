@@ -9,7 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from src.api.app import create_app
-from src.db import StudyAgentTraceRecord
+from src.db import StudyAgentRunRecord, StudyAgentTraceRecord
 from src.db.models import (
     AuditEventRecord,
     Base,
@@ -91,6 +91,14 @@ class FakeStudyAgentOrchestrator:
 class FailingStudyAgentOrchestrator:
     async def run(self, payload: dict) -> StudyAgentResult:
         raise ValueError("bad study request")
+
+
+@dataclass
+class SensitiveFailingStudyAgentOrchestrator:
+    async def run(self, payload: dict) -> StudyAgentResult:
+        raise ValueError(
+            "raw private query 什么是导数？ token sk-secret-token path /Users/private.pdf"
+        )
 
 
 @dataclass
@@ -444,6 +452,26 @@ def _login_admin(client: TestClient, Session) -> dict[str, str]:
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
+def _login_other(client: TestClient, Session) -> dict[str, str]:
+    with Session() as session:
+        session.add(
+            UserRecord(
+                id="user-2",
+                email="other@example.com",
+                password_hash=hash_password("password-123"),
+                role="user",
+                is_active=True,
+            )
+        )
+        session.commit()
+    response = client.post(
+        "/api/auth/login",
+        json={"email": "other@example.com", "password": "password-123"},
+    )
+    assert response.status_code == 200
+    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+
 def _insert_ready_document_for_api(
     Session, *, document_id: str = "doc-api", owner_id: str = "user-1"
 ) -> None:
@@ -653,6 +681,357 @@ def test_study_agent_query_returns_trace_payload(tmp_path: Path):
             "request_id": "req-study-1",
         }
     ]
+
+
+def test_study_agent_run_create_returns_completed_run_without_raw_query(tmp_path: Path):
+    client, orchestrator, Session, _document_service = _client(tmp_path)
+    headers = _login(client)
+
+    response = client.post(
+        "/api/study-agent/runs",
+        json={"query": "什么是导数？", "expected_terms": ["变化率"]},
+        headers={**headers, "x-request-id": "req-study-run-1"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    run = payload["run"]
+    assert payload["verification"]["passed"] is True
+    assert "audit_metadata" not in payload
+    assert run["id"].startswith("run-")
+    assert run["status"] == "completed"
+    assert run["query_hash"].startswith("sha256:")
+    assert run["trace_id"].startswith("trace-")
+    assert run["result_summary"]["trace_id"] == run["trace_id"]
+    assert run["result_summary"]["selected_mode"] == "simple_rag"
+    assert "audit_metadata" not in run
+    assert "query" not in run
+    assert "什么是导数" not in json.dumps(run, ensure_ascii=False)
+    assert orchestrator.payloads[-1] == {
+        "query": "什么是导数？",
+        "expected_terms": ["变化率"],
+        "authenticated_user_id": "user-1",
+        "request_id": "req-study-run-1",
+    }
+    with Session() as session:
+        record = session.get(StudyAgentRunRecord, run["id"])
+        events = (
+            session.query(AuditEventRecord)
+            .filter(AuditEventRecord.action.in_(
+                ["study_agent_run.created", "study_agent_run.completed"]
+            ))
+            .order_by(AuditEventRecord.action)
+            .all()
+        )
+    assert record is not None
+    assert record.owner_id == "user-1"
+    assert record.status == "completed"
+    assert len(events) == 2
+    assert all(event.resource_id == run["id"] for event in events)
+    serialized_events = json.dumps(
+        [event.event_metadata for event in events], ensure_ascii=False
+    )
+    assert "什么是导数" not in serialized_events
+
+
+def test_study_agent_run_create_marks_needs_review_and_reuses_review_task(
+    tmp_path: Path,
+):
+    workflow_id = new_workflow_id()
+    Session = _session_factory()
+    app = create_app(
+        session_factory=Session,
+        secret_key="test-secret",
+        allow_dev_user_header=False,
+        study_agent_orchestrator=WorkflowStudyAgentOrchestrator(
+            workflow_id,
+            needs_review=True,
+        ),
+    )
+    client = TestClient(app)
+    headers = _login(client)
+
+    response = client.post(
+        "/api/study-agent/runs",
+        json={"query": "什么是导数？"},
+        headers={**headers, "x-request-id": "req-study-run-review"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    run = payload["run"]
+    assert run["status"] == "needs_review"
+    assert run["workflow_id"] == workflow_id
+    assert run["review_task_id"] == payload["review_task"]["id"]
+    assert run["result_summary"]["needs_review"] is True
+    assert run["result_summary"]["stage_count"] == 2
+    with Session() as session:
+        records = session.query(ReviewTaskRecord).all()
+    assert len(records) == 1
+    assert records[0].id == payload["review_task"]["id"]
+
+
+def test_study_agent_run_create_failure_persists_safe_failed_run_and_audit(
+    tmp_path: Path,
+):
+    Session = _session_factory()
+    app = create_app(
+        session_factory=Session,
+        secret_key="test-secret",
+        allow_dev_user_header=False,
+        study_agent_orchestrator=SensitiveFailingStudyAgentOrchestrator(),
+    )
+    client = TestClient(app)
+    headers = _login(client)
+
+    response = client.post(
+        "/api/study-agent/runs",
+        json={"query": "什么是导数？"},
+        headers={**headers, "x-request-id": "req-study-run-failed"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "bad_study_request"
+    with Session() as session:
+        run = session.query(StudyAgentRunRecord).one()
+        failed_event = (
+            session.query(AuditEventRecord)
+            .filter(AuditEventRecord.action == "study_agent_run.failed")
+            .one()
+        )
+    assert run.status == "failed"
+    assert run.error_code == "bad_study_request"
+    assert run.error_message == "bad_study_request"
+    serialized = json.dumps(
+        {
+            "run": {
+                "query_hash": run.query_hash,
+                "result_summary": run.result_summary,
+                "error_code": run.error_code,
+                "error_message": run.error_message,
+                "lifecycle_metadata": run.lifecycle_metadata,
+            },
+            "audit": failed_event.event_metadata,
+        },
+        ensure_ascii=False,
+    )
+    for forbidden in [
+        "什么是导数",
+        "raw private query",
+        "sk-secret-token",
+        "/Users/private.pdf",
+        "token",
+        "path",
+    ]:
+        assert forbidden not in serialized
+
+
+def test_study_agent_runs_list_is_owner_scoped_and_excludes_archived_by_default(
+    tmp_path: Path,
+):
+    client, _orchestrator, Session, _document_service = _client(tmp_path)
+    headers = _login(client)
+    other_headers = _login_other(client, Session)
+
+    first = client.post(
+        "/api/study-agent/runs",
+        json={"query": "owner active run"},
+        headers={**headers, "x-request-id": "req-owner-active"},
+    ).json()["run"]
+    archived = client.post(
+        "/api/study-agent/runs",
+        json={"query": "owner archived run"},
+        headers={**headers, "x-request-id": "req-owner-archived"},
+    ).json()["run"]
+    other = client.post(
+        "/api/study-agent/runs",
+        json={"query": "other active run"},
+        headers={**other_headers, "x-request-id": "req-other-active"},
+    )
+    archive_response = client.post(
+        f"/api/study-agent/runs/{archived['id']}/archive",
+        headers=headers,
+    )
+
+    assert other.status_code == 200
+    assert archive_response.status_code == 200
+    active_list = client.get("/api/study-agent/runs", headers=headers)
+    archived_list = client.get(
+        "/api/study-agent/runs?include_archived=true",
+        headers=headers,
+    )
+
+    assert active_list.status_code == 200
+    assert [run["id"] for run in active_list.json()["runs"]] == [first["id"]]
+    archived_ids = {run["id"] for run in archived_list.json()["runs"]}
+    assert {first["id"], archived["id"]}.issubset(archived_ids)
+    assert other.json()["run"]["id"] not in archived_ids
+
+
+def test_study_agent_run_detail_returns_403_for_cross_owner_and_404_for_missing(
+    tmp_path: Path,
+):
+    client, _orchestrator, Session, _document_service = _client(tmp_path)
+    owner_headers = _login(client)
+    other_headers = _login_other(client, Session)
+    created = client.post(
+        "/api/study-agent/runs",
+        json={"query": "owner run"},
+        headers=owner_headers,
+    ).json()["run"]
+
+    cross_owner = client.get(
+        f"/api/study-agent/runs/{created['id']}",
+        headers=other_headers,
+    )
+    missing = client.get(
+        "/api/study-agent/runs/run-00000000000000000000000000000000",
+        headers=owner_headers,
+    )
+
+    assert cross_owner.status_code == 403
+    assert cross_owner.json()["detail"] == "Forbidden"
+    assert missing.status_code == 404
+    assert missing.json()["detail"] == "Run not found"
+
+
+def test_study_agent_run_controls_change_status_emit_audit_and_conflict(
+    tmp_path: Path,
+):
+    client, _orchestrator, Session, _document_service = _client(tmp_path)
+    headers = _login(client)
+    other_headers = _login_other(client, Session)
+    with Session() as session:
+        session.add_all(
+            [
+                StudyAgentRunRecord(
+                    id="run-" + "1" * 32,
+                    owner_id="user-1",
+                    request_id="req-control-cancel",
+                    status="queued",
+                    query_hash="sha256:" + "1" * 64,
+                    target="answer",
+                    document_ids=[],
+                    expected_term_count=0,
+                    attempt=1,
+                    result_summary={},
+                    lifecycle_metadata={},
+                ),
+                StudyAgentRunRecord(
+                    id="run-" + "2" * 32,
+                    owner_id="user-1",
+                    request_id="req-control-pause",
+                    status="queued",
+                    query_hash="sha256:" + "2" * 64,
+                    target="answer",
+                    document_ids=[],
+                    expected_term_count=0,
+                    attempt=1,
+                    result_summary={},
+                    lifecycle_metadata={},
+                ),
+            ]
+        )
+        session.commit()
+
+    cancel = client.post("/api/study-agent/runs/run-" + "1" * 32 + "/cancel", headers=headers)
+    pause = client.post("/api/study-agent/runs/run-" + "2" * 32 + "/pause", headers=headers)
+    resume = client.post("/api/study-agent/runs/run-" + "2" * 32 + "/resume", headers=headers)
+    invalid = client.post("/api/study-agent/runs/run-" + "1" * 32 + "/pause", headers=headers)
+    cross_owner = client.post(
+        "/api/study-agent/runs/run-" + "2" * 32 + "/cancel",
+        headers=other_headers,
+    )
+    missing = client.post(
+        "/api/study-agent/runs/run-00000000000000000000000000000000/cancel",
+        headers=headers,
+    )
+    completed = client.post(
+        "/api/study-agent/runs",
+        json={"query": "archive me"},
+        headers=headers,
+    ).json()["run"]
+    archive = client.post(
+        f"/api/study-agent/runs/{completed['id']}/archive",
+        headers=headers,
+    )
+
+    assert cancel.status_code == 200
+    assert cancel.json()["status"] == "cancelled"
+    assert pause.status_code == 200
+    assert pause.json()["status"] == "paused"
+    assert resume.status_code == 200
+    assert resume.json()["status"] == "queued"
+    assert invalid.status_code == 409
+    assert invalid.json()["detail"] == "Invalid run transition"
+    assert cross_owner.status_code == 403
+    assert missing.status_code == 404
+    assert archive.status_code == 200
+    assert archive.json()["status"] == "archived"
+    with Session() as session:
+        actions = {
+            event.action
+            for event in session.query(AuditEventRecord)
+            .filter(AuditEventRecord.action.like("study_agent_run.%"))
+            .all()
+        }
+    assert {
+        "study_agent_run.cancel_requested",
+        "study_agent_run.pause_requested",
+        "study_agent_run.resume_requested",
+        "study_agent_run.archived",
+    }.issubset(actions)
+
+
+def test_study_agent_run_retry_creates_child_run_without_raw_stored_query(
+    tmp_path: Path,
+):
+    client, _orchestrator, Session, _document_service = _client(tmp_path)
+    headers = _login(client)
+    with Session() as session:
+        session.add(
+            StudyAgentRunRecord(
+                id="run-" + "3" * 32,
+                owner_id="user-1",
+                request_id="req-parent",
+                status="failed",
+                query_hash="sha256:" + "3" * 64,
+                target="answer",
+                document_ids=[],
+                expected_term_count=0,
+                attempt=1,
+                result_summary={},
+                error_code="bad_study_request",
+                error_message="bad_study_request",
+                lifecycle_metadata={},
+            )
+        )
+        session.commit()
+
+    response = client.post(
+        "/api/study-agent/runs/run-" + "3" * 32 + "/retry",
+        json={"query": "Fresh retry query sk-secret-token"},
+        headers={**headers, "x-request-id": "req-retry-child"},
+    )
+
+    assert response.status_code == 200
+    run = response.json()["run"]
+    assert run["status"] == "completed"
+    assert run["retry_of_run_id"] == "run-" + "3" * 32
+    assert run["attempt"] == 2
+    assert "fresh retry query" not in json.dumps(run).lower()
+    assert "sk-secret-token" not in json.dumps(run)
+    with Session() as session:
+        child = session.get(StudyAgentRunRecord, run["id"])
+        retry_event = (
+            session.query(AuditEventRecord)
+            .filter(AuditEventRecord.action == "study_agent_run.retry_requested")
+            .one()
+        )
+    assert child.retry_of_run_id == "run-" + "3" * 32
+    assert retry_event.resource_id == "run-" + "3" * 32
+    assert retry_event.event_metadata["run_id"] == "run-" + "3" * 32
+    assert retry_event.event_metadata["child_run_id"] == run["id"]
 
 
 def test_study_agent_skills_endpoint_returns_safe_registry(tmp_path: Path):

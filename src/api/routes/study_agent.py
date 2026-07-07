@@ -5,7 +5,7 @@ from enum import Enum
 from time import perf_counter
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import sessionmaker
 
@@ -24,6 +24,11 @@ from src.services.study_agent_trace import (
     safe_skill_metadata,
 )
 from src.services.study_agent_review_tasks import StudyAgentReviewTaskService
+from src.services.study_agent_runs import (
+    StudyAgentRunConflict,
+    StudyAgentRunNotFound,
+    StudyAgentRunService,
+)
 from src.services.study_agent_workflow import sanitize_workflow_payload
 
 
@@ -54,6 +59,220 @@ async def query_study_agent(
     request: Request,
 ) -> dict[str, Any]:
     context = get_user_context(request)
+    return await _execute_study_agent_query(request, payload, context=context)
+
+
+@router.post("/runs")
+async def create_study_agent_run(
+    payload: StudyAgentQueryRequest,
+    request: Request,
+) -> dict[str, Any]:
+    context = get_user_context(request)
+    service = _study_agent_run_service(request)
+    if _study_agent_runner(request) is None:
+        raise HTTPException(status_code=503, detail="Study agent is not configured")
+    payload_data = payload.model_dump(exclude_none=True)
+    run = service.create_run(
+        owner_id=context.user_id,
+        request_id=context.request_id,
+        payload=payload_data,
+    )
+    _record_study_agent_run_audit(
+        request,
+        actor_id=context.user_id,
+        request_id=context.request_id,
+        action="study_agent_run.created",
+        run=run,
+    )
+    return await _execute_study_agent_run(
+        request,
+        payload,
+        context=context,
+        service=service,
+        run=run,
+    )
+
+
+@router.get("/runs")
+def list_study_agent_runs(
+    request: Request,
+    status: str | None = None,
+    include_archived: bool = False,
+    limit: int = Query(default=20, ge=1, le=100),
+) -> dict[str, Any]:
+    context = get_user_context(request)
+    service = _study_agent_run_service(request)
+    try:
+        runs = service.list_runs(
+            owner_id=context.user_id,
+            status=status,
+            include_archived=include_archived,
+            limit=limit,
+        )
+    except StudyAgentRunConflict as exc:
+        raise HTTPException(status_code=409, detail="Invalid run transition") from exc
+    return {"runs": runs}
+
+
+@router.get("/runs/{run_id}")
+def get_study_agent_run(request: Request, run_id: str) -> dict[str, Any]:
+    context = get_user_context(request)
+    service = _study_agent_run_service(request)
+    run = service.get_run(owner_id=context.user_id, run_id=run_id)
+    if run is None:
+        _raise_run_not_found_or_forbidden(service, run_id)
+    return run
+
+
+@router.post("/runs/{run_id}/cancel")
+def cancel_study_agent_run(request: Request, run_id: str) -> dict[str, Any]:
+    context = get_user_context(request)
+    service = _study_agent_run_service(request)
+    run = _apply_run_control(
+        service,
+        owner_id=context.user_id,
+        run_id=run_id,
+        action="cancel",
+    )
+    _record_study_agent_run_audit(
+        request,
+        actor_id=context.user_id,
+        request_id=context.request_id,
+        action="study_agent_run.cancel_requested",
+        run=run,
+    )
+    return run
+
+
+@router.post("/runs/{run_id}/pause")
+def pause_study_agent_run(request: Request, run_id: str) -> dict[str, Any]:
+    context = get_user_context(request)
+    service = _study_agent_run_service(request)
+    run = _apply_run_control(
+        service,
+        owner_id=context.user_id,
+        run_id=run_id,
+        action="pause",
+    )
+    _record_study_agent_run_audit(
+        request,
+        actor_id=context.user_id,
+        request_id=context.request_id,
+        action="study_agent_run.pause_requested",
+        run=run,
+    )
+    return run
+
+
+@router.post("/runs/{run_id}/resume")
+def resume_study_agent_run(request: Request, run_id: str) -> dict[str, Any]:
+    context = get_user_context(request)
+    service = _study_agent_run_service(request)
+    run = _apply_run_control(
+        service,
+        owner_id=context.user_id,
+        run_id=run_id,
+        action="resume",
+    )
+    _record_study_agent_run_audit(
+        request,
+        actor_id=context.user_id,
+        request_id=context.request_id,
+        action="study_agent_run.resume_requested",
+        run=run,
+    )
+    return run
+
+
+@router.post("/runs/{run_id}/archive")
+def archive_study_agent_run(request: Request, run_id: str) -> dict[str, Any]:
+    context = get_user_context(request)
+    service = _study_agent_run_service(request)
+    run = _apply_run_control(
+        service,
+        owner_id=context.user_id,
+        run_id=run_id,
+        action="archive",
+    )
+    _record_study_agent_run_audit(
+        request,
+        actor_id=context.user_id,
+        request_id=context.request_id,
+        action="study_agent_run.archived",
+        run=run,
+    )
+    return run
+
+
+@router.post("/runs/{run_id}/retry")
+async def retry_study_agent_run(
+    run_id: str,
+    payload: StudyAgentQueryRequest,
+    request: Request,
+) -> dict[str, Any]:
+    context = get_user_context(request)
+    service = _study_agent_run_service(request)
+    if _study_agent_runner(request) is None:
+        raise HTTPException(status_code=503, detail="Study agent is not configured")
+    try:
+        run = service.create_retry_run(
+            owner_id=context.user_id,
+            request_id=context.request_id,
+            parent_run_id=run_id,
+            payload=payload.model_dump(exclude_none=True),
+        )
+    except StudyAgentRunNotFound as exc:
+        _raise_run_not_found_or_forbidden(service, run_id, cause=exc)
+    except StudyAgentRunConflict as exc:
+        raise HTTPException(status_code=409, detail="Invalid run transition") from exc
+    _record_study_agent_run_audit(
+        request,
+        actor_id=context.user_id,
+        request_id=context.request_id,
+        action="study_agent_run.retry_requested",
+        run={"id": run_id, "status": "retry_requested", "attempt": run.get("attempt")},
+        extra={"child_run_id": run["id"]},
+    )
+    return await _execute_study_agent_run(
+        request,
+        payload,
+        context=context,
+        service=service,
+        run=run,
+    )
+
+
+async def _execute_study_agent_query(
+    request: Request,
+    payload: StudyAgentQueryRequest,
+    *,
+    context: Any,
+) -> dict[str, Any]:
+    try:
+        result, payload_data, latency_ms = await _run_study_agent_runner(
+            request,
+            payload,
+            context=context,
+        )
+    except StudyAgentDocumentError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _build_study_agent_response(
+        request,
+        context=context,
+        result=result,
+        payload_data=payload_data,
+        latency_ms=latency_ms,
+    )
+
+
+async def _run_study_agent_runner(
+    request: Request,
+    payload: StudyAgentQueryRequest,
+    *,
+    context: Any,
+) -> tuple[Any, dict[str, Any], int | float]:
     runner = _study_agent_runner(request)
     if runner is None:
         raise HTTPException(status_code=503, detail="Study agent is not configured")
@@ -61,15 +280,21 @@ async def query_study_agent(
     payload_data["authenticated_user_id"] = context.user_id
     payload_data["request_id"] = context.request_id
     started_at = perf_counter()
-    try:
-        result = await runner.run(payload_data)
-        latency_ms = getattr(result, "audit_metadata", {}).get("latency_ms")
-        if latency_ms is None:
-            latency_ms = round((perf_counter() - started_at) * 1000, 3)
-    except StudyAgentDocumentError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    result = await runner.run(payload_data)
+    latency_ms = getattr(result, "audit_metadata", {}).get("latency_ms")
+    if latency_ms is None:
+        latency_ms = round((perf_counter() - started_at) * 1000, 3)
+    return result, payload_data, latency_ms
+
+
+def _build_study_agent_response(
+    request: Request,
+    *,
+    context: Any,
+    result: Any,
+    payload_data: dict[str, Any],
+    latency_ms: int | float,
+) -> dict[str, Any]:
     trace_payload = _record_study_agent_trace(
         request,
         actor_id=context.user_id,
@@ -113,6 +338,81 @@ async def query_study_agent(
             response_payload["review_task"] = review_task
     if trace_payload is not None:
         response_payload["trace"] = trace_payload
+    return response_payload
+
+
+async def _execute_study_agent_run(
+    request: Request,
+    payload: StudyAgentQueryRequest,
+    *,
+    context: Any,
+    service: StudyAgentRunService,
+    run: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        service.mark_running(owner_id=context.user_id, run_id=run["id"])
+        result, payload_data, latency_ms = await _run_study_agent_runner(
+            request,
+            payload,
+            context=context,
+        )
+        response_payload = _build_study_agent_response(
+            request,
+            context=context,
+            result=result,
+            payload_data=payload_data,
+            latency_ms=latency_ms,
+        )
+    except StudyAgentDocumentError as exc:
+        failed = service.mark_terminal(
+            owner_id=context.user_id,
+            run_id=run["id"],
+            status="failed",
+            error_code=_safe_exception_code(exc),
+            error_message=_safe_exception_code(exc),
+        )
+        _record_study_agent_run_audit(
+            request,
+            actor_id=context.user_id,
+            request_id=context.request_id,
+            action="study_agent_run.failed",
+            run=failed,
+            extra={"reason": failed.get("error_code")},
+        )
+        raise HTTPException(status_code=exc.status_code, detail=failed["error_code"]) from exc
+    except ValueError as exc:
+        failed = service.mark_terminal(
+            owner_id=context.user_id,
+            run_id=run["id"],
+            status="failed",
+            error_code="bad_study_request",
+            error_message="bad_study_request",
+        )
+        _record_study_agent_run_audit(
+            request,
+            actor_id=context.user_id,
+            request_id=context.request_id,
+            action="study_agent_run.failed",
+            run=failed,
+            extra={"reason": "bad_study_request"},
+        )
+        raise HTTPException(status_code=422, detail="bad_study_request") from exc
+
+    terminal_status = _terminal_status_for_response(response_payload)
+    completed = service.mark_terminal(
+        owner_id=context.user_id,
+        run_id=run["id"],
+        status=terminal_status,
+        result_summary=_run_result_summary(response_payload),
+    )
+    _record_study_agent_run_audit(
+        request,
+        actor_id=context.user_id,
+        request_id=context.request_id,
+        action="study_agent_run.completed",
+        run=completed,
+    )
+    response_payload["run"] = completed
     return response_payload
 
 
@@ -223,6 +523,177 @@ def delete_study_agent_memory(request: Request, memory_id: str) -> dict[str, str
     if not deleted:
         raise HTTPException(status_code=404, detail="Memory not found")
     return {"id": memory_id, "status": "deleted"}
+
+
+def _study_agent_run_service(request: Request) -> StudyAgentRunService:
+    session_factory = getattr(request.app.state, "session_factory", None)
+    if session_factory is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Study agent run store is not configured",
+        )
+    return StudyAgentRunService(_non_expiring_session_factory(session_factory))
+
+
+def _apply_run_control(
+    service: StudyAgentRunService,
+    *,
+    owner_id: str,
+    run_id: str,
+    action: str,
+) -> dict[str, Any]:
+    try:
+        if action == "cancel":
+            return service.cancel(owner_id=owner_id, run_id=run_id)
+        if action == "pause":
+            return service.pause(owner_id=owner_id, run_id=run_id)
+        if action == "resume":
+            return service.resume(owner_id=owner_id, run_id=run_id)
+        if action == "archive":
+            return service.archive(owner_id=owner_id, run_id=run_id)
+    except StudyAgentRunNotFound as exc:
+        _raise_run_not_found_or_forbidden(service, run_id, cause=exc)
+    except StudyAgentRunConflict as exc:
+        raise HTTPException(status_code=409, detail="Invalid run transition") from exc
+    raise HTTPException(status_code=409, detail="Invalid run transition")
+
+
+def _raise_run_not_found_or_forbidden(
+    service: StudyAgentRunService,
+    run_id: str,
+    *,
+    cause: Exception | None = None,
+) -> None:
+    if service.run_exists(run_id):
+        raise HTTPException(status_code=403, detail="Forbidden") from cause
+    raise HTTPException(status_code=404, detail="Run not found") from cause
+
+
+def _terminal_status_for_response(response_payload: dict[str, Any]) -> str:
+    workflow = response_payload.get("workflow")
+    verification = response_payload.get("verification")
+    workflow_needs_review = isinstance(workflow, dict) and (
+        workflow.get("needs_review") is True or workflow.get("status") == "needs_review"
+    )
+    verification_needs_review = isinstance(verification, dict) and (
+        verification.get("needs_review") is True
+    )
+    if workflow_needs_review or verification_needs_review or response_payload.get("review_task"):
+        return "needs_review"
+    return "completed"
+
+
+def _run_result_summary(response_payload: dict[str, Any]) -> dict[str, Any]:
+    trace = response_payload.get("trace") if isinstance(response_payload.get("trace"), dict) else {}
+    workflow = (
+        response_payload.get("workflow")
+        if isinstance(response_payload.get("workflow"), dict)
+        else {}
+    )
+    review_task = (
+        response_payload.get("review_task")
+        if isinstance(response_payload.get("review_task"), dict)
+        else {}
+    )
+    policy = response_payload.get("policy") if isinstance(response_payload.get("policy"), dict) else {}
+    expert = response_payload.get("expert") if isinstance(response_payload.get("expert"), dict) else {}
+    evidence = (
+        response_payload.get("evidence")
+        if isinstance(response_payload.get("evidence"), dict)
+        else {}
+    )
+    draft = response_payload.get("draft") if isinstance(response_payload.get("draft"), dict) else {}
+    verification = (
+        response_payload.get("verification")
+        if isinstance(response_payload.get("verification"), dict)
+        else {}
+    )
+
+    workflow_id = workflow.get("workflow_id") or trace.get("workflow", {}).get("workflow_id")
+    summary = {
+        "trace_id": trace.get("trace_id"),
+        "workflow_id": workflow_id,
+        "review_task_id": review_task.get("id"),
+        "selected_mode": (
+            policy.get("selected_mode")
+            or trace.get("selected_mode")
+            or evidence.get("mode")
+        ),
+        "policy_status": policy.get("status") or "not_applied",
+        "category": policy.get("category") or "unknown",
+        "source_count": trace.get("source_count") or len(evidence.get("sources") or []),
+        "used_chunk_count": trace.get("used_chunk_count") or draft.get("used_chunk_count"),
+        "confidence": trace.get("confidence") or verification.get("confidence"),
+        "source_recall": trace.get("source_recall") or verification.get("source_recall"),
+        "answer_term_recall": trace.get("answer_term_recall")
+        or verification.get("answer_term_recall"),
+        "needs_review": _terminal_status_for_response(response_payload) == "needs_review",
+        "latency_ms": trace.get("latency_ms"),
+        "stage_count": workflow.get("stage_count")
+        or trace.get("workflow", {}).get("stage_count"),
+        "expert_enabled": expert.get("enabled"),
+        "expert_branch_count": expert.get("branch_count"),
+        "expert_timeout_count": expert.get("timeout_count"),
+        "expert_failure_count": expert.get("failure_count"),
+    }
+    return {key: value for key, value in summary.items() if value is not None}
+
+
+def _safe_exception_code(exc: StudyAgentDocumentError) -> str:
+    if exc.code in {
+        "authentication_required",
+        "document_evidence_missing",
+        "unsupported_study_target",
+        "unsupported_retrieval_mode",
+        "forbidden_document",
+        "bad_study_request",
+    }:
+        return exc.code
+    if exc.status_code == 404:
+        return "forbidden_document"
+    return "bad_study_request"
+
+
+def _record_study_agent_run_audit(
+    request: Request,
+    *,
+    actor_id: str,
+    request_id: str,
+    action: str,
+    run: dict[str, Any],
+    extra: dict[str, Any] | None = None,
+) -> None:
+    session_factory = getattr(request.app.state, "session_factory", None)
+    if session_factory is None:
+        return
+
+    summary = run.get("result_summary") if isinstance(run.get("result_summary"), dict) else {}
+    metadata = {
+        "run_id": run.get("id"),
+        "workflow_id": run.get("workflow_id") or summary.get("workflow_id"),
+        "trace_id": run.get("trace_id") or summary.get("trace_id"),
+        "status": run.get("status"),
+        "selected_mode": run.get("selected_mode") or summary.get("selected_mode"),
+        "policy_status": summary.get("policy_status"),
+        "needs_review": summary.get("needs_review"),
+        "reason": run.get("error_code") or (extra or {}).get("reason"),
+        "attempt": run.get("attempt"),
+    }
+    if extra:
+        metadata.update(extra)
+    record_audit_event(
+        session_factory=_non_expiring_session_factory(session_factory),
+        actor_id=actor_id,
+        action=action,
+        resource_type="study_agent_run",
+        resource_id=str(run.get("id") or "study-agent-run"),
+        request_id=request_id,
+        metadata={
+            key: value
+            for key, value in metadata.items()
+            if isinstance(value, (str, int, float, bool)) or value is None
+        },
+    )
 
 
 def _study_agent_runner(request: Request) -> Any | None:
