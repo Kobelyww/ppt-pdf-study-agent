@@ -25,6 +25,8 @@ Study Agent workflow supervision now exposes a safe stage timeline for intake, p
 
 Study Agent collaboration now links review-gated outputs to persisted review tasks, records owner-scoped safe memory summaries, and labels bounded study skills by version. These additions keep the deterministic supervisor as the product mainline and do not introduce open-ended autonomous agent loops or raw conversation memory.
 
+Bounded expert collaboration can now run only for policy-approved synthesis and question-generation paths. Expert diagnostics and skill performance summaries remain compact and privacy-safe; they expose labels, counts, rates, and reason codes rather than raw query text, generated content, prompts, or source snippets.
+
 RAG route policy P2 is now represented in deterministic evaluation fixtures and reports. The fixture set covers direct lookup, definition, concept relation, learning path, multi-document synthesis, question generation, and outline fragment cases; evaluation reports include privacy-safe policy status and category summaries without raw query, answer, chunk, prompt, or source snippet text.
 
 The frontend workbench includes a Study Agent panel for one or more ready documents, grounded answer/question/note generation, citation display, confidence, and review status.
