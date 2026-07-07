@@ -27,9 +27,11 @@ Study Agent collaboration now links review-gated outputs to persisted review tas
 
 Bounded expert collaboration can now run only for policy-approved synthesis and question-generation paths. Expert diagnostics and skill performance summaries remain compact and privacy-safe; they expose labels, counts, rates, and reason codes rather than raw query text, generated content, prompts, or source snippets.
 
+Study Agent runs are now durable, owner-scoped lifecycle records. The product run API can create, inspect, cancel, pause, resume, retry, and archive runs while storing only safe request/result summaries such as query hashes, ids, counts, statuses, workflow ids, trace ids, and review flags.
+
 RAG route policy P2 is now represented in deterministic evaluation fixtures and reports. The fixture set covers direct lookup, definition, concept relation, learning path, multi-document synthesis, question generation, and outline fragment cases; evaluation reports include privacy-safe policy status and category summaries without raw query, answer, chunk, prompt, or source snippet text.
 
-The frontend workbench includes a Study Agent panel for one or more ready documents, grounded answer/question/note generation, citation display, confidence, and review status.
+The frontend workbench includes a Study Agent panel for one or more ready documents, grounded answer/question/note generation, citation display, confidence, review status, and compact run lifecycle controls.
 
 ### MVP-8 Production Readiness Foundation
 
