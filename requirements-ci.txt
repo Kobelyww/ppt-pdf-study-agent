@@ -1,6 +1,7 @@
 # Verified dependency set for CI and local tests.
 # Provider SDK placeholders in requirements.txt are intentionally excluded.
 fastapi>=0.100.0
+python-multipart>=0.0.9
 uvicorn>=0.30.0
 pydantic>=2.0.0
 python-dotenv>=1.0.0

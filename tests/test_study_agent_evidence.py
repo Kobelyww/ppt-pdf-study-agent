@@ -1,6 +1,7 @@
 import pytest
 
 from src.knowledge.knowledge_graph import KnowledgeGraph, KnowledgePoint, Relationship
+from src.services.agentic_rag import AgenticRAGPlan
 from src.services.rag_router import RetrievalMode
 from src.services.rag_service import RAGService
 from src.services.study_agent import (
@@ -84,10 +85,18 @@ def _graph() -> KnowledgeGraph:
 class _RecordingPlanner:
     def __init__(self) -> None:
         self.queries: list[str] = []
+        self.budgets: list[str] = []
 
-    def plan(self, query: str):
+    def plan(self, query: str, budget: str = "balanced") -> AgenticRAGPlan:
         self.queries.append(query)
-        return None
+        self.budgets.append(budget)
+        return AgenticRAGPlan(
+            mode="agentic_rag",
+            reason="recorded test plan",
+            steps=(),
+            estimated_cost=budget,
+            metadata={"step_budget_exhausted": False},
+        )
 
 
 @pytest.mark.asyncio
@@ -211,6 +220,7 @@ async def test_non_low_agentic_successful_graph_evidence_returns_agentic_bundle(
     bundle = await collector.collect(request, mode=RetrievalMode.AGENTIC)
 
     assert planner.queries == ["导数和梯度有什么关系？"]
+    assert planner.budgets == ["balanced"]
     assert bundle.mode == RetrievalMode.AGENTIC
     assert bundle.sources == ("calculus:derivative", "calculus:gradient")
     assert bundle.concept_ids == ("kp-derivative", "kp-gradient")
@@ -231,6 +241,7 @@ async def test_non_low_agentic_unavailable_evidence_falls_back_to_simple():
     bundle = await collector.collect(request, mode=RetrievalMode.AGENTIC)
 
     assert planner.queries == ["导数是什么？"]
+    assert planner.budgets == ["high"]
     assert bundle.mode == RetrievalMode.SIMPLE
     assert bundle.fallback_reason == "agentic evidence unavailable"
     assert bundle.confidence == 0.0
