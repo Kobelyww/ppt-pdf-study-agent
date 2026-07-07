@@ -257,7 +257,7 @@ async def _execute_study_agent_query(
     except StudyAgentDocumentError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail="bad_study_request") from exc
     return _build_study_agent_response(
         request,
         context=context,
@@ -364,39 +364,35 @@ async def _execute_study_agent_run(
             latency_ms=latency_ms,
         )
     except StudyAgentDocumentError as exc:
-        failed = service.mark_terminal(
-            owner_id=context.user_id,
-            run_id=run["id"],
-            status="failed",
-            error_code=_safe_exception_code(exc),
-            error_message=_safe_exception_code(exc),
-        )
-        _record_study_agent_run_audit(
+        error_code = _safe_exception_code(exc)
+        failed = _mark_study_agent_run_failed_safely(
             request,
-            actor_id=context.user_id,
-            request_id=context.request_id,
-            action="study_agent_run.failed",
-            run=failed,
-            extra={"reason": failed.get("error_code")},
+            context=context,
+            service=service,
+            run=run,
+            error_code=error_code,
         )
         raise HTTPException(status_code=exc.status_code, detail=failed["error_code"]) from exc
     except ValueError as exc:
-        failed = service.mark_terminal(
-            owner_id=context.user_id,
-            run_id=run["id"],
-            status="failed",
-            error_code="bad_study_request",
-            error_message="bad_study_request",
-        )
-        _record_study_agent_run_audit(
+        _mark_study_agent_run_failed_safely(
             request,
-            actor_id=context.user_id,
-            request_id=context.request_id,
-            action="study_agent_run.failed",
-            run=failed,
-            extra={"reason": "bad_study_request"},
+            context=context,
+            service=service,
+            run=run,
+            error_code="bad_study_request",
         )
         raise HTTPException(status_code=422, detail="bad_study_request") from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _mark_study_agent_run_failed_safely(
+            request,
+            context=context,
+            service=service,
+            run=run,
+            error_code="run_failed",
+        )
+        raise HTTPException(status_code=500, detail="Study agent run failed") from exc
 
     terminal_status = _terminal_status_for_response(response_payload)
     completed = service.mark_terminal(
@@ -652,6 +648,32 @@ def _safe_exception_code(exc: StudyAgentDocumentError) -> str:
     if exc.status_code == 404:
         return "forbidden_document"
     return "bad_study_request"
+
+
+def _mark_study_agent_run_failed_safely(
+    request: Request,
+    *,
+    context: Any,
+    service: StudyAgentRunService,
+    run: dict[str, Any],
+    error_code: str,
+) -> dict[str, Any]:
+    failed = service.mark_terminal(
+        owner_id=context.user_id,
+        run_id=run["id"],
+        status="failed",
+        error_code=error_code,
+        error_message=error_code,
+    )
+    _record_study_agent_run_audit(
+        request,
+        actor_id=context.user_id,
+        request_id=context.request_id,
+        action="study_agent_run.failed",
+        run=failed,
+        extra={"reason": failed.get("error_code") or error_code},
+    )
+    return failed
 
 
 def _record_study_agent_run_audit(

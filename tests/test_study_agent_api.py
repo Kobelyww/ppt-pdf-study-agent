@@ -102,6 +102,12 @@ class SensitiveFailingStudyAgentOrchestrator:
 
 
 @dataclass
+class RuntimeErrorStudyAgentOrchestrator:
+    async def run(self, payload: dict) -> StudyAgentResult:
+        raise RuntimeError("raw runtime failure sk-secret-token /Users/private")
+
+
+@dataclass
 class SensitivePolicyStudyAgentOrchestrator:
     async def run(self, payload: dict) -> StudyAgentResult:
         request = StudyRequest(query=payload["query"], target=StudyTarget.ANSWER)
@@ -826,6 +832,63 @@ def test_study_agent_run_create_failure_persists_safe_failed_run_and_audit(
         assert forbidden not in serialized
 
 
+def test_study_agent_run_unexpected_exception_marks_run_failed_safely(
+    tmp_path: Path,
+):
+    Session = _session_factory()
+    app = create_app(
+        session_factory=Session,
+        secret_key="test-secret",
+        allow_dev_user_header=False,
+        study_agent_orchestrator=RuntimeErrorStudyAgentOrchestrator(),
+    )
+    client = TestClient(app, raise_server_exceptions=False)
+    headers = _login(client)
+
+    response = client.post(
+        "/api/study-agent/runs",
+        json={"query": "什么是导数？"},
+        headers={**headers, "x-request-id": "req-study-run-runtime-failed"},
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Study agent run failed"
+    with Session() as session:
+        run = session.query(StudyAgentRunRecord).one()
+        failed_event = (
+            session.query(AuditEventRecord)
+            .filter(AuditEventRecord.action == "study_agent_run.failed")
+            .one()
+        )
+    assert run.status == "failed"
+    assert run.error_code == "run_failed"
+    assert run.error_message == "run_failed"
+
+    serialized = json.dumps(
+        {
+            "response": response.json(),
+            "run": {
+                "query_hash": run.query_hash,
+                "result_summary": run.result_summary,
+                "error_code": run.error_code,
+                "error_message": run.error_message,
+                "lifecycle_metadata": run.lifecycle_metadata,
+            },
+            "audit": failed_event.event_metadata,
+        },
+        ensure_ascii=False,
+    )
+    for forbidden in [
+        "raw runtime failure",
+        "sk-secret-token",
+        "/Users/private",
+        "RuntimeError",
+        "token",
+        "path",
+    ]:
+        assert forbidden not in serialized
+
+
 def test_study_agent_runs_list_is_owner_scoped_and_excludes_archived_by_default(
     tmp_path: Path,
 ):
@@ -1251,7 +1314,7 @@ def test_study_agent_query_unsupported_skill_version_maps_to_422(tmp_path: Path)
     )
 
     assert response.status_code == 422
-    assert "unsupported skill version" in response.json()["detail"]
+    assert response.json()["detail"] == "bad_study_request"
 
 
 def test_study_agent_query_skill_error_omits_raw_requested_values(tmp_path: Path):
@@ -1278,7 +1341,7 @@ def test_study_agent_query_skill_error_omits_raw_requested_values(tmp_path: Path
 
     assert response.status_code == 422
     detail = response.json()["detail"]
-    assert detail == "unsupported skill version"
+    assert detail == "bad_study_request"
     assert "sk-secret-token" not in detail
     assert "Selected document is unavailable" not in detail
 
@@ -2411,7 +2474,37 @@ def test_study_agent_query_maps_value_error_to_422(tmp_path: Path):
     )
 
     assert response.status_code == 422
-    assert response.json()["detail"] == "bad study request"
+    assert response.json()["detail"] == "bad_study_request"
+
+
+def test_study_agent_query_value_error_response_is_sanitized(tmp_path: Path):
+    Session = _session_factory()
+    app = create_app(
+        session_factory=Session,
+        secret_key="test-secret",
+        allow_dev_user_header=False,
+        study_agent_orchestrator=SensitiveFailingStudyAgentOrchestrator(),
+    )
+    client = TestClient(app)
+    headers = _login(client)
+
+    response = client.post(
+        "/api/study-agent/query",
+        json={"query": "什么是导数？"},
+        headers=headers,
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "bad_study_request"
+    serialized = response.text
+    for forbidden in [
+        "raw private query",
+        "sk-secret-token",
+        "/Users/private",
+        "token",
+        "path",
+    ]:
+        assert forbidden not in serialized
 
 
 def _runtime_client():
