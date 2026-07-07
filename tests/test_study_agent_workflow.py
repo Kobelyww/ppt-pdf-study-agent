@@ -18,6 +18,7 @@ from src.services.study_agent_workflow import (
     build_workflow_payload,
     new_workflow_id,
     sanitize_stage_summary,
+    sanitize_workflow_payload,
     summarize_workflow_status,
 )
 
@@ -685,3 +686,46 @@ def test_sanitize_stage_summary_filters_unsafe_opaque_ids():
         "request_id": "request:abc.123",
         "document_ids": ["doc-1"],
     }
+
+
+def test_workflow_sanitizer_keeps_safe_expert_gate_metadata_only():
+    workflow = build_workflow_payload(
+        workflow_id="workflow-0123456789abcdef0123456789abcdef",
+        stages=[
+            WorkflowStageResult(
+                stage_name=WorkflowStageName.EXPERT_GATE,
+                status=WorkflowStageStatus.SKIPPED,
+                input_summary={"query": "raw private query"},
+                output_summary={
+                    "expert_enabled": False,
+                    "expert_branch_count": 0,
+                    "expert_timeout_count": 0,
+                    "expert_failure_count": 0,
+                    "expert_fallback_reason": "expert_disabled",
+                    "prompt": "hidden prompt",
+                    "token": "sk-secret-token",
+                },
+                duration_ms=0,
+            )
+        ],
+        needs_review=False,
+    )
+
+    safe = sanitize_workflow_payload(workflow)
+
+    assert safe is not None
+    stage = safe["stages"][0]
+    assert stage["stage"] == "expert_gate"
+    assert stage["status"] == "skipped"
+    assert stage["input_summary"] == {}
+    assert stage["output_summary"] == {
+        "expert_enabled": False,
+        "expert_branch_count": 0,
+        "expert_timeout_count": 0,
+        "expert_failure_count": 0,
+        "expert_fallback_reason": "expert_disabled",
+    }
+    serialized = str(safe).lower()
+    assert "raw private query" not in serialized
+    assert "hidden prompt" not in serialized
+    assert "sk-secret-token" not in serialized

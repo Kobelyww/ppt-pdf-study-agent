@@ -22,6 +22,7 @@ class WorkflowStageName(str, Enum):
     PLAN = "plan"
     SKILL_SELECT = "skill_select"
     RETRIEVE = "retrieve"
+    EXPERT_GATE = "expert_gate"
     GENERATE = "generate"
     VERIFY = "verify"
     REVIEW_GATE = "review_gate"
@@ -114,6 +115,18 @@ _SAFE_STRING_VALUES = {
     },
     "skill_version": {"v1"},
     "review_gate_profile": {"standard", "strict"},
+    "expert_fallback_reason": {
+        "expert_disabled",
+        "category_not_eligible",
+        "policy_not_allowed",
+        "mode_not_allowed_by_skill",
+        "index_not_ready",
+        "budget_not_allowed",
+        "branch_timeout",
+        "branch_error",
+        "graph_unavailable",
+        "serial_fallback",
+    },
 }
 
 _SAFE_INT_KEYS = {
@@ -127,6 +140,9 @@ _SAFE_INT_KEYS = {
     "used_chunk_count",
     "citation_count",
     "memory_record_count",
+    "expert_branch_count",
+    "expert_timeout_count",
+    "expert_failure_count",
 }
 _SAFE_FLOAT_KEYS = {
     "confidence",
@@ -140,6 +156,7 @@ _SAFE_BOOL_KEYS = {
     "fallback_used",
     "persisted_chunks_used",
     "experiment_enabled",
+    "expert_enabled",
 }
 _SAFE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_:\.-]{1,128}$")
 _GENERATED_WORKFLOW_ID_PATTERN = re.compile(r"^workflow-[0-9a-f]{32}$")

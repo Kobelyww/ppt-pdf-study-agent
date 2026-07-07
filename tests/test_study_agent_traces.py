@@ -19,6 +19,7 @@ from src.services.study_agent import (
     StudyVerification,
 )
 from src.services.study_agent_trace import StudyAgentTraceService
+from src.services.study_agent_trace import safe_expert_metadata
 from src.services.study_agent_trace import safe_policy_metadata, safe_skill_metadata
 from src.services.study_agent_workflow import new_workflow_id
 
@@ -668,3 +669,35 @@ def test_policy_sanitizer_keeps_known_safe_policy_reasons(reason: str):
 
     assert policy["reason"] == reason
     assert policy["blocked_reason"] == reason
+
+
+def test_trace_expert_sanitizer_keeps_labels_and_counts_only():
+    safe = safe_expert_metadata(
+        {
+            "enabled": True,
+            "branch_count": 2,
+            "timeout_count": 1,
+            "failure_count": 0,
+            "fallback_reason": "branch_timeout",
+            "branch_statuses": {
+                "retrieval_expert": "passed",
+                "graph_expert": "timeout",
+                "raw_branch": "passed",
+            },
+            "query": "raw private query",
+            "chunk_content": "secret source text",
+            "token": "sk-secret-token",
+        }
+    )
+
+    assert safe == {
+        "enabled": True,
+        "branch_count": 2,
+        "timeout_count": 1,
+        "failure_count": 0,
+        "fallback_reason": "branch_timeout",
+        "branch_statuses": {
+            "retrieval_expert": "passed",
+            "graph_expert": "timeout",
+        },
+    }

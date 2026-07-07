@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from src.db import StudyAgentTraceRecord
 from src.services.study_agent import StudyAgentResult
+from src.services.study_agent_experts import safe_expert_metadata
 from src.services.study_agent_workflow import is_safe_workflow_id, sanitize_workflow_payload
 
 
@@ -97,6 +98,9 @@ class StudyAgentTraceService:
         workflow = sanitize_workflow_payload(result.audit_metadata.get("workflow"))
         if workflow is not None:
             trace_metadata["workflow"] = workflow
+        safe_expert = safe_expert_metadata(result.audit_metadata.get("expert"))
+        if safe_expert is not None:
+            trace_metadata["expert"] = safe_expert
 
         record = StudyAgentTraceRecord(
             id=f"trace-{uuid4().hex}",
@@ -323,4 +327,7 @@ def _trace_payload(
     workflow = sanitize_workflow_payload((record.trace_metadata or {}).get("workflow"))
     if workflow is not None:
         payload["workflow"] = workflow
+    expert = safe_expert_metadata((record.trace_metadata or {}).get("expert"))
+    if expert is not None:
+        payload["expert"] = expert
     return payload
