@@ -15,6 +15,7 @@ from src.services.study_agent_documents import StudyAgentDocumentError
 from src.services.study_agent_index import StudyDocumentIndexService
 from src.services.study_agent_memory import StudyAgentMemoryService
 from src.services.study_agent_runtime import StudyAgentRuntimeService
+from src.services.study_agent_skill_performance import StudyAgentSkillPerformanceService
 from src.services.study_agent_skills import StudySkillRegistry
 from src.services.study_agent_trace import (
     StudyAgentTraceService,
@@ -118,6 +119,25 @@ async def query_study_agent(
 @router.get("/skills")
 def list_study_agent_skills(_request: Request) -> list[dict[str, Any]]:
     return StudySkillRegistry().list_skills()
+
+
+@router.get("/skills/performance")
+def get_study_agent_skill_performance(
+    request: Request,
+    skill_name: str | None = None,
+    skill_version: str | None = None,
+) -> dict[str, Any]:
+    context = get_user_context(request)
+    session_factory = getattr(request.app.state, "session_factory", None)
+    if session_factory is None:
+        return {"skills": []}
+    return StudyAgentSkillPerformanceService(
+        _non_expiring_session_factory(session_factory)
+    ).summary(
+        owner_id=context.user_id,
+        skill_name=skill_name,
+        skill_version=skill_version,
+    )
 
 
 @router.get("/traces/{trace_id}")

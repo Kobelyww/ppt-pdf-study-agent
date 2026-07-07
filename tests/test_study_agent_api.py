@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from src.api.app import create_app
+from src.db import StudyAgentTraceRecord
 from src.db.models import (
     AuditEventRecord,
     Base,
@@ -675,6 +676,79 @@ def test_study_agent_skills_endpoint_returns_safe_registry(tmp_path: Path):
     serialized = json.dumps(payload, ensure_ascii=False)
     for forbidden in ["query", "chunk_content", "prompt", "token", "secret"]:
         assert forbidden not in serialized.lower()
+
+
+def test_skill_performance_endpoint_is_owner_scoped(tmp_path: Path):
+    client, _orchestrator, Session, _document_service = _client(tmp_path)
+    headers = _login(client)
+    with Session() as session:
+        session.add_all(
+            [
+                StudyAgentTraceRecord(
+                    id="trace-owner",
+                    owner_id="user-1",
+                    request_id="req-owner",
+                    query_hash="sha256:owner",
+                    target="answer",
+                    document_ids=["doc-api"],
+                    selected_mode="simple_rag",
+                    route_reason="safe",
+                    estimated_cost="low",
+                    fallback_chain=[],
+                    chunk_source="persisted",
+                    fallback_reason=None,
+                    source_count=1,
+                    used_chunk_count=1,
+                    confidence=0.8,
+                    source_recall=1.0,
+                    answer_term_recall=1.0,
+                    needs_review=False,
+                    latency_ms=10,
+                    trace_metadata={
+                        "skill": {
+                            "skill_name": "concept_explanation",
+                            "skill_version": "v1",
+                        }
+                    },
+                ),
+                StudyAgentTraceRecord(
+                    id="trace-other",
+                    owner_id="user-2",
+                    request_id="req-other",
+                    query_hash="sha256:other",
+                    target="answer",
+                    document_ids=["doc-other"],
+                    selected_mode="simple_rag",
+                    route_reason="safe",
+                    estimated_cost="low",
+                    fallback_chain=[],
+                    chunk_source="persisted",
+                    fallback_reason=None,
+                    source_count=1,
+                    used_chunk_count=1,
+                    confidence=0.1,
+                    source_recall=0.1,
+                    answer_term_recall=0.1,
+                    needs_review=True,
+                    latency_ms=10,
+                    trace_metadata={
+                        "skill": {
+                            "skill_name": "practice_question",
+                            "skill_version": "v1",
+                        }
+                    },
+                ),
+            ]
+        )
+        session.commit()
+
+    response = client.get("/api/study-agent/skills/performance", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["skills"][0]["skill_name"] == "concept_explanation"
+    serialized = json.dumps(response.json(), ensure_ascii=False)
+    assert "user-2" not in serialized
+    assert "trace-other" not in serialized
 
 
 def test_study_agent_query_response_includes_safe_skill_payload():
