@@ -80,6 +80,7 @@ SAFE_SKILL_VERSIONS = {"v1"}
 SAFE_DOCUMENT_ID_PATTERN = re.compile(r"^[A-Za-z0-9_:\.-]{1,128}$")
 UNSAFE_DOCUMENT_ID_TERMS = ("token", "secret", "password", "authorization")
 SAFE_RESULT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_:\.-]{0,127}$")
+SAFE_RUN_ID_PATTERN = re.compile(r"^run-[0-9a-f]{32}$")
 SAFE_WORKFLOW_ID_PATTERN = re.compile(r"^workflow-[0-9a-f]{32}$")
 SAFE_POLICY_STATUSES = {
     "allowed",
@@ -148,7 +149,7 @@ class StudyAgentRunService:
             skill_name=safe_payload["skill_name"],
             skill_version=safe_payload["skill_version"],
             expected_term_count=safe_payload["expected_term_count"],
-            retry_of_run_id=retry_of_run_id,
+            retry_of_run_id=_safe_run_id(retry_of_run_id),
             attempt=max(1, int(attempt or 1)),
             result_summary={},
             lifecycle_metadata={},
@@ -448,10 +449,7 @@ def _safe_document_ids(value: Any) -> list[str]:
 def _is_safe_document_id(label: str | None) -> bool:
     if label is None:
         return False
-    normalized = label.lower()
-    if any(term in normalized for term in UNSAFE_DOCUMENT_ID_TERMS):
-        return False
-    if "/" in label or "\\" in label:
+    if _is_unsafe_metadata_label(label):
         return False
     return bool(SAFE_DOCUMENT_ID_PATTERN.fullmatch(label))
 
@@ -477,6 +475,13 @@ def _safe_workflow_id(value: Any) -> str | None:
     if label is None or _is_unsafe_metadata_label(label):
         return None
     return label if SAFE_WORKFLOW_ID_PATTERN.fullmatch(label) else None
+
+
+def _safe_run_id(value: Any) -> str | None:
+    label = _safe_optional_string(value)
+    if label is None or _is_unsafe_metadata_label(label):
+        return None
+    return label if SAFE_RUN_ID_PATTERN.fullmatch(label) else None
 
 
 def _safe_allowlisted_label(

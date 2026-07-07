@@ -86,6 +86,39 @@ def test_create_run_drops_unsafe_request_metadata_labels(tmp_path):
     assert "../../" not in serialized
 
 
+def test_create_run_drops_secret_shaped_document_and_retry_ids(tmp_path):
+    service = _service(tmp_path)
+
+    run = service.create_run(
+        owner_id="user-1",
+        request_id="req-1",
+        payload={
+            **_payload(),
+            "document_ids": [
+                "doc-safe-1",
+                "sk-live-abc",
+                "api-key-abc",
+                "secret-token",
+                "password-reset",
+            ],
+        },
+        retry_of_run_id="/tmp/run sk-secret-token",
+    )
+
+    assert run["document_ids"] == ["doc-safe-1"]
+    assert run["retry_of_run_id"] is None
+
+    serialized = str(run).lower()
+    for unsafe_fragment in (
+        "sk-live",
+        "api-key",
+        "secret-token",
+        "password-reset",
+        "/tmp",
+    ):
+        assert unsafe_fragment not in serialized
+
+
 def test_mark_completed_stores_safe_result_summary_only(tmp_path):
     service = _service(tmp_path)
     run = service.create_run(owner_id="user-1", request_id="req-1", payload=_payload())
