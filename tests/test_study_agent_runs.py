@@ -141,6 +141,58 @@ def test_mark_completed_stores_safe_result_summary_only(tmp_path):
     assert "sk-secret-token" not in serialized
 
 
+def test_mark_completed_rejects_unsafe_allowed_string_result_values(tmp_path):
+    service = _service(tmp_path)
+    run = service.create_run(owner_id="user-1", request_id="req-1", payload=_payload())
+    running = service.mark_running(owner_id="user-1", run_id=run["id"])
+
+    completed = service.mark_terminal(
+        owner_id="user-1",
+        run_id=running["id"],
+        status="completed",
+        result_summary={
+            "trace_id": "trace-safe-1",
+            "workflow_id": "workflow-" + "a" * 32,
+            "review_task_id": "review-safe-1",
+            "selected_mode": "../../agentic_rag",
+            "policy_status": "sk-secret-token",
+            "category": "/tmp/private-category",
+            "source_count": 2,
+            "confidence": 0.9,
+            "needs_review": False,
+            "latency_ms": 12.5,
+            "stage_count": 8,
+            "expert_enabled": True,
+            "expert_branch_count": 1,
+            "token": "sk-secret-token",
+            "answer": "raw answer",
+        },
+    )
+
+    assert completed["trace_id"] == "trace-safe-1"
+    assert completed["workflow_id"] == "workflow-" + "a" * 32
+    assert completed["review_task_id"] == "review-safe-1"
+    assert completed["result_summary"].get("trace_id") == "trace-safe-1"
+    assert completed["result_summary"].get("workflow_id") == "workflow-" + "a" * 32
+    assert completed["result_summary"].get("review_task_id") == "review-safe-1"
+    assert completed["result_summary"].get("selected_mode") is None
+    assert completed["result_summary"].get("policy_status") is None
+    assert completed["result_summary"].get("category") is None
+    assert completed["result_summary"]["source_count"] == 2
+    assert completed["result_summary"]["confidence"] == 0.9
+    assert completed["result_summary"]["needs_review"] is False
+    assert completed["result_summary"]["latency_ms"] == 12.5
+    assert completed["result_summary"]["stage_count"] == 8
+    assert completed["result_summary"]["expert_enabled"] is True
+    assert completed["result_summary"]["expert_branch_count"] == 1
+
+    serialized = str(completed).lower()
+    assert "sk-secret-token" not in serialized
+    assert "/tmp/private" not in serialized
+    assert "../../" not in serialized
+    assert "raw answer" not in serialized
+
+
 def test_mark_failed_persists_only_safe_error_labels(tmp_path):
     service = _service(tmp_path)
     run = service.create_run(owner_id="user-1", request_id="req-1", payload=_payload())

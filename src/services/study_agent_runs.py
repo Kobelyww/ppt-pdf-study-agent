@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from hashlib import sha256
+from math import isfinite
 from typing import Any
 from uuid import uuid4
 import re
@@ -78,6 +79,27 @@ SAFE_SKILL_NAMES = {
 SAFE_SKILL_VERSIONS = {"v1"}
 SAFE_DOCUMENT_ID_PATTERN = re.compile(r"^[A-Za-z0-9_:\.-]{1,128}$")
 UNSAFE_DOCUMENT_ID_TERMS = ("token", "secret", "password", "authorization")
+SAFE_RESULT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_:\.-]{0,127}$")
+SAFE_WORKFLOW_ID_PATTERN = re.compile(r"^workflow-[0-9a-f]{32}$")
+SAFE_POLICY_STATUSES = {
+    "allowed",
+    "blocked_by_flag",
+    "blocked_by_category",
+    "blocked_by_readiness",
+    "blocked_by_budget",
+    "blocked_by_index_health",
+    "not_applied",
+}
+SAFE_RESULT_CATEGORIES = {
+    "direct_lookup",
+    "definition",
+    "concept_relation",
+    "learning_path",
+    "multi_document_synthesis",
+    "question_generation",
+    "outline_fragment",
+    "unknown",
+}
 _ALLOWED_TRANSITIONS = {
     "queued": {"running", "paused", "cancelled"},
     "running": {"completed", "needs_review", "failed", "paused", "cancelled", "timed_out"},
@@ -328,7 +350,27 @@ def _sanitize_result_summary(summary: Mapping[str, Any]) -> dict[str, Any]:
         if key not in summary:
             continue
         value = summary[key]
-        if key in {
+        if key in {"trace_id", "review_task_id"}:
+            label = _safe_result_id(value)
+            if label is not None:
+                safe[key] = label
+        elif key == "workflow_id":
+            label = _safe_workflow_id(value)
+            if label is not None:
+                safe[key] = label
+        elif key == "selected_mode":
+            label = _safe_allowlisted_label(value, SAFE_RETRIEVAL_MODES)
+            if label is not None:
+                safe[key] = label
+        elif key == "policy_status":
+            label = _safe_allowlisted_label(value, SAFE_POLICY_STATUSES)
+            if label is not None:
+                safe[key] = label
+        elif key == "category":
+            label = _safe_allowlisted_label(value, SAFE_RESULT_CATEGORIES)
+            if label is not None:
+                safe[key] = label
+        elif key in {
             "source_count",
             "used_chunk_count",
             "stage_count",
@@ -336,21 +378,21 @@ def _sanitize_result_summary(summary: Mapping[str, Any]) -> dict[str, Any]:
             "expert_timeout_count",
             "expert_failure_count",
         }:
-            safe[key] = _safe_int(value)
+            safe_value = _safe_result_int(value)
+            if safe_value is not None:
+                safe[key] = safe_value
         elif key in {
             "confidence",
             "source_recall",
             "answer_term_recall",
             "latency_ms",
         }:
-            safe[key] = _safe_float(value)
+            safe_value = _safe_result_float(value)
+            if safe_value is not None:
+                safe[key] = safe_value
         elif key in {"needs_review", "expert_enabled"}:
             if isinstance(value, bool):
                 safe[key] = value
-        else:
-            label = _safe_optional_string(value)
-            if label is not None:
-                safe[key] = label
     return safe
 
 
@@ -414,6 +456,29 @@ def _is_safe_document_id(label: str | None) -> bool:
     return bool(SAFE_DOCUMENT_ID_PATTERN.fullmatch(label))
 
 
+def _is_unsafe_metadata_label(label: str) -> bool:
+    normalized = label.lower()
+    if any(term in normalized for term in UNSAFE_DOCUMENT_ID_TERMS):
+        return True
+    if normalized.startswith(("sk-", "bearer ", "api-key", "apikey")):
+        return True
+    return "/" in label or "\\" in label or ".." in label
+
+
+def _safe_result_id(value: Any) -> str | None:
+    label = _safe_optional_string(value)
+    if label is None or _is_unsafe_metadata_label(label):
+        return None
+    return label if SAFE_RESULT_ID_PATTERN.fullmatch(label) else None
+
+
+def _safe_workflow_id(value: Any) -> str | None:
+    label = _safe_optional_string(value)
+    if label is None or _is_unsafe_metadata_label(label):
+        return None
+    return label if SAFE_WORKFLOW_ID_PATTERN.fullmatch(label) else None
+
+
 def _safe_allowlisted_label(
     value: Any, allowed: set[str], *, default: str | None = None
 ) -> str | None:
@@ -463,6 +528,28 @@ def _safe_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _safe_result_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not isfinite(number):
+        return None
+    return max(0, int(number))
+
+
+def _safe_result_float(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if isfinite(number) else None
 
 
 def _safe_limit(value: int) -> int:
