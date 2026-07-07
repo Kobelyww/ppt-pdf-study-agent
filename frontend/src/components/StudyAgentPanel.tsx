@@ -290,12 +290,16 @@ function StudyAgentPanel({
       setSkillPerformance(null);
       const skill = data.skill ?? data.trace?.skill;
       if (skill?.skill_name) {
-        const performance = await getStudyAgentSkillPerformance(
-          apiClient,
-          skill.skill_name,
-          skill.skill_version ?? undefined,
-        );
-        setSkillPerformance(performance.skills[0] ?? null);
+        try {
+          const performance = await getStudyAgentSkillPerformance(
+            apiClient,
+            skill.skill_name,
+            skill.skill_version ?? undefined,
+          );
+          setSkillPerformance(performance.skills[0] ?? null);
+        } catch {
+          setSkillPerformance(null);
+        }
       } else {
         setSkillPerformance(null);
       }
