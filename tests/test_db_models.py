@@ -18,6 +18,7 @@ from src.db import (
     RAGEvaluationCaseScoreRecord,
     RAGEvaluationRunRecord,
     ReviewTaskRecord,
+    StudyAgentRunRecord,
     StudyAgentMemoryRecord,
     StudyAgentTraceRecord,
     ContentVersionRecord,
@@ -159,6 +160,46 @@ def test_processing_job_rejects_unknown_status(tmp_path):
 
         with pytest.raises(IntegrityError):
             session.commit()
+
+
+def test_study_agent_run_record_accepts_product_lifecycle_statuses(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'runs.db'}")
+    Base.metadata.create_all(engine)
+    SessionFactory = create_session_factory(engine)
+    statuses = [
+        "queued",
+        "running",
+        "paused",
+        "completed",
+        "needs_review",
+        "failed",
+        "cancelled",
+        "timed_out",
+        "archived",
+    ]
+
+    with SessionFactory() as session:
+        for status in statuses:
+            session.add(
+                StudyAgentRunRecord(
+                    id=f"run-{status}",
+                    owner_id="user-1",
+                    request_id=f"req-{status}",
+                    status=status,
+                    query_hash="sha256:" + "a" * 64,
+                    target="answer",
+                    document_ids=["doc-1"],
+                    expected_term_count=0,
+                    attempt=1,
+                    result_summary={},
+                    lifecycle_metadata={},
+                )
+            )
+        session.commit()
+
+    with SessionFactory() as session:
+        stored = {row.status for row in session.query(StudyAgentRunRecord).all()}
+    assert stored == set(statuses)
 
 
 def test_mvp7_product_records_create_and_preserve_metadata_columns(tmp_path):

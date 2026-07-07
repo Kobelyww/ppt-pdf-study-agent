@@ -393,6 +393,62 @@ class StudyAgentTraceRecord(Base):
     )
 
 
+class StudyAgentRunRecord(Base):
+    __tablename__ = "study_agent_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued', 'running', 'paused', 'completed', 'needs_review', "
+            "'failed', 'cancelled', 'timed_out', 'archived')",
+            name="ck_study_agent_runs_status",
+        ),
+        Index("ix_study_agent_runs_owner_created", "owner_id", "created_at"),
+        Index(
+            "ix_study_agent_runs_owner_status_created",
+            "owner_id",
+            "status",
+            "created_at",
+        ),
+        Index("ix_study_agent_runs_owner_request", "owner_id", "request_id"),
+        Index("ix_study_agent_runs_owner_retry", "owner_id", "retry_of_run_id"),
+        Index("ix_study_agent_runs_workflow", "workflow_id"),
+        Index("ix_study_agent_runs_trace", "trace_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
+    query_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    target: Mapped[str] = mapped_column(String(128), nullable=False)
+    document_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    preferred_mode: Mapped[Optional[str]] = mapped_column(String(64))
+    selected_mode: Mapped[Optional[str]] = mapped_column(String(64))
+    budget: Mapped[Optional[str]] = mapped_column(String(32))
+    skill_name: Mapped[Optional[str]] = mapped_column(String(128))
+    skill_version: Mapped[Optional[str]] = mapped_column(String(64))
+    expected_term_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    workflow_id: Mapped[Optional[str]] = mapped_column(String(128))
+    trace_id: Mapped[Optional[str]] = mapped_column(String(128))
+    review_task_id: Mapped[Optional[str]] = mapped_column(String(128))
+    retry_of_run_id: Mapped[Optional[str]] = mapped_column(String(64))
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    result_summary: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    error_code: Mapped[Optional[str]] = mapped_column(String(128))
+    error_message: Mapped[Optional[str]] = mapped_column(String(255))
+    lifecycle_metadata: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    paused_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
 class StudyAgentMemoryRecord(Base):
     __tablename__ = "study_agent_memories"
     __table_args__ = (

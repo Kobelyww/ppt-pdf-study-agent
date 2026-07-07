@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.config import RAGConfig
-from src.db.models import ContentVersionRecord, StudyAgentMemoryRecord
+from src.db.models import ContentVersionRecord, StudyAgentMemoryRecord, StudyAgentRunRecord
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -99,6 +99,9 @@ def test_alembic_upgrade_creates_orm_compatible_sqlite_schema(tmp_path, monkeypa
     memory_columns = {
         column["name"] for column in inspector.get_columns("study_agent_memories")
     }
+    run_columns = {
+        column["name"] for column in inspector.get_columns("study_agent_runs")
+    }
     eval_run_columns = {
         column["name"] for column in inspector.get_columns("rag_evaluation_runs")
     }
@@ -176,6 +179,37 @@ def test_alembic_upgrade_creates_orm_compatible_sqlite_schema(tmp_path, monkeypa
     }.issubset(memory_columns)
     assert {
         "id",
+        "owner_id",
+        "request_id",
+        "status",
+        "query_hash",
+        "target",
+        "document_ids",
+        "preferred_mode",
+        "selected_mode",
+        "budget",
+        "skill_name",
+        "skill_version",
+        "expected_term_count",
+        "workflow_id",
+        "trace_id",
+        "review_task_id",
+        "retry_of_run_id",
+        "attempt",
+        "result_summary",
+        "error_code",
+        "error_message",
+        "lifecycle_metadata",
+        "created_at",
+        "updated_at",
+        "started_at",
+        "completed_at",
+        "cancelled_at",
+        "paused_at",
+        "archived_at",
+    }.issubset(run_columns)
+    assert {
+        "id",
         "created_by",
         "fixture_version",
         "modes",
@@ -205,6 +239,7 @@ def test_alembic_upgrade_creates_orm_compatible_sqlite_schema(tmp_path, monkeypa
     memory_indexes = {
         index["name"] for index in inspector.get_indexes("study_agent_memories")
     }
+    run_indexes = {index["name"] for index in inspector.get_indexes("study_agent_runs")}
     review_task_indexes = {index["name"] for index in inspector.get_indexes("review_tasks")}
     eval_run_indexes = {index["name"] for index in inspector.get_indexes("rag_evaluation_runs")}
     eval_score_indexes = {
@@ -222,6 +257,14 @@ def test_alembic_upgrade_creates_orm_compatible_sqlite_schema(tmp_path, monkeypa
         "ix_study_agent_memories_owner_scope",
         "ix_study_agent_memories_owner_key",
     }.issubset(memory_indexes)
+    assert {
+        "ix_study_agent_runs_owner_created",
+        "ix_study_agent_runs_owner_status_created",
+        "ix_study_agent_runs_owner_request",
+        "ix_study_agent_runs_owner_retry",
+        "ix_study_agent_runs_workflow",
+        "ix_study_agent_runs_trace",
+    }.issubset(run_indexes)
     assert "ix_review_tasks_owner_target_status" in review_task_indexes
     assert {
         "ix_rag_eval_runs_created_by_created",
@@ -307,6 +350,30 @@ def test_alembic_upgrade_creates_orm_compatible_sqlite_schema(tmp_path, monkeypa
         assert memory is not None
         assert memory.value_json == {"value": "concise"}
         assert memory.privacy_level == "safe_metadata"
+
+    with Session(engine) as session:
+        session.add(
+            StudyAgentRunRecord(
+                id="run-1",
+                owner_id="user-1",
+                request_id="req-1",
+                status="queued",
+                query_hash="sha256:" + "a" * 64,
+                target="answer",
+                document_ids=["doc-1"],
+                expected_term_count=0,
+                attempt=1,
+                result_summary={},
+                lifecycle_metadata={},
+            )
+        )
+        session.commit()
+
+    with Session(engine) as session:
+        run = session.get(StudyAgentRunRecord, "run-1")
+        assert run is not None
+        assert run.status == "queued"
+        assert run.document_ids == ["doc-1"]
 
     _run_alembic("downgrade", "base")
 
