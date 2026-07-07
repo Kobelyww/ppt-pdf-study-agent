@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -44,6 +45,23 @@ SAFE_METRIC_KEYS = {
     "latency_ms",
     "fallback_used",
 }
+SAFE_SOURCE_ID_PATTERN = re.compile(
+    r"^document:[A-Za-z0-9_-]{1,64}:chunk:[0-9]{1,10}$"
+)
+CREDENTIAL_LABEL_DENYLIST = (
+    "secret",
+    "token",
+    "password",
+    "passwd",
+    "api_key",
+    "apikey",
+    "auth",
+    "authorization",
+    "bearer",
+    "credential",
+    "credentials",
+    "key",
+)
 
 
 @dataclass(frozen=True)
@@ -202,7 +220,7 @@ def _safe_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
 def _safe_source_id(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
-    if value.startswith("document:") and 1 <= len(value) <= 128:
+    if 1 <= len(value) <= 128 and SAFE_SOURCE_ID_PATTERN.fullmatch(value):
         return value
     return None
 
@@ -211,7 +229,8 @@ def _safe_label(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
     if 1 <= len(value) <= 64 and all(char.isalnum() or char in {"_", "-", ":"} for char in value):
-        if "secret" not in value.lower() and "token" not in value.lower():
+        normalized = value.lower()
+        if not any(term in normalized for term in CREDENTIAL_LABEL_DENYLIST):
             return value
     return None
 

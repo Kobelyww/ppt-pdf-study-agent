@@ -88,6 +88,52 @@ def test_expert_branch_result_safe_dict_omits_raw_values():
     assert "generated answer" not in serialized
 
 
+def test_expert_branch_result_counts_only_opaque_safe_source_ids():
+    result = ExpertBranchResult(
+        branch_name="retrieval_expert",
+        status="passed",
+        source_ids=(
+            "document:doc-1:chunk:0",
+            "document:/Users/alice/private.pdf",
+            "document:C:\\Users\\alice\\private.pdf",
+            "document:https://example.com/private.pdf",
+            "document:doc 1:chunk:0",
+            "document:private.pdf:chunk:0",
+        ),
+    )
+
+    safe = result.to_safe_dict()
+
+    assert safe["source_count"] == 1
+    serialized = str(safe).lower()
+    assert "alice" not in serialized
+    assert "private.pdf" not in serialized
+    assert "https://example.com" not in serialized
+
+
+def test_expert_branch_result_omits_credential_like_concept_labels():
+    result = ExpertBranchResult(
+        branch_name="graph_expert",
+        status="passed",
+        concept_ids=(
+            "derivative",
+            "password_hint",
+            "openai_api_key",
+            "authorization_header",
+            "bearer_session",
+            "credential_store",
+            "encryption_key",
+        ),
+    )
+
+    safe = result.to_safe_dict()
+
+    assert safe["concept_count"] == 1
+    serialized = str(safe).lower()
+    for blocked in ("password", "api_key", "authorization", "bearer", "credential", "key"):
+        assert blocked not in serialized
+
+
 def test_safe_expert_metadata_allows_only_labels_counts_and_statuses():
     metadata = safe_expert_metadata(
         {
