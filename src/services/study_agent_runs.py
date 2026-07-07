@@ -52,6 +52,19 @@ RESULT_SUMMARY_KEYS = {
     "expert_timeout_count",
     "expert_failure_count",
 }
+SAFE_ERROR_LABELS = {
+    "authentication_required",
+    "document_evidence_missing",
+    "unsupported_study_target",
+    "unsupported_retrieval_mode",
+    "forbidden_document",
+    "bad_study_request",
+    "run_conflict",
+    "run_cancelled",
+    "run_timed_out",
+    "run_failed",
+    "unknown",
+}
 _ALLOWED_TRANSITIONS = {
     "queued": {"running", "paused", "cancelled"},
     "running": {"completed", "needs_review", "failed", "paused", "cancelled", "timed_out"},
@@ -199,8 +212,12 @@ class StudyAgentRunService:
             record.workflow_id = safe_summary.get("workflow_id")
             record.review_task_id = safe_summary.get("review_task_id")
             record.selected_mode = safe_summary.get("selected_mode") or record.selected_mode
-            record.error_code = _safe_short_label(error_code)
-            record.error_message = _safe_short_label(error_message)
+            safe_error_code = _safe_error_label(error_code)
+            safe_error_message = _safe_error_label(error_message)
+            if safe_error_message == "unknown" and safe_error_code is not None:
+                safe_error_message = safe_error_code
+            record.error_code = safe_error_code
+            record.error_message = safe_error_message
             record.completed_at = _utc_now()
             session.commit()
             return _serialize_run(record)
@@ -388,6 +405,16 @@ def _safe_short_label(value: Any) -> str | None:
     if label is None:
         return None
     return label[:128]
+
+
+def _safe_error_label(value: Any) -> str | None:
+    label = _safe_optional_string(value)
+    if label is None:
+        return None
+    normalized = label.strip().lower()
+    if normalized in SAFE_ERROR_LABELS:
+        return normalized
+    return "unknown"
 
 
 def _safe_int(value: Any) -> int:

@@ -108,6 +108,31 @@ def test_mark_completed_stores_safe_result_summary_only(tmp_path):
     assert "sk-secret-token" not in serialized
 
 
+def test_mark_failed_persists_only_safe_error_labels(tmp_path):
+    service = _service(tmp_path)
+    run = service.create_run(owner_id="user-1", request_id="req-1", payload=_payload())
+    service.mark_running(owner_id="user-1", run_id=run["id"])
+
+    failed = service.mark_terminal(
+        owner_id="user-1",
+        run_id=run["id"],
+        status="failed",
+        error_code="ValueError /tmp/private sk-secret-token",
+        error_message="Traceback token sk-secret-token /Users/private",
+    )
+    persisted = service.get_run(owner_id="user-1", run_id=run["id"])
+
+    for observed in (failed, persisted):
+        assert observed["error_code"] in {"unknown", "run_failed"}
+        assert observed["error_message"] in {"unknown", "run_failed"}
+        serialized = str(observed)
+        assert "sk-secret-token" not in serialized
+        assert "/tmp" not in serialized
+        assert "/Users/private" not in serialized
+        assert "Traceback" not in serialized
+        assert "ValueError" not in serialized
+
+
 def test_control_transitions_enforce_allowed_statuses(tmp_path):
     service = _service(tmp_path)
     run = service.create_run(owner_id="user-1", request_id="req-1", payload=_payload())
