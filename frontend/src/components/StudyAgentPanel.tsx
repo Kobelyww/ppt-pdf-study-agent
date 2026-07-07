@@ -297,7 +297,10 @@ function StudyAgentPanel({
             skill.skill_version ?? undefined,
           );
           setSkillPerformance(performance.skills[0] ?? null);
-        } catch {
+        } catch (caught) {
+          if (caught instanceof ApiError && caught.status === 401) {
+            onAuthExpired();
+          }
           setSkillPerformance(null);
         }
       } else {

@@ -244,6 +244,63 @@ def test_expert_gate_is_disabled_by_default():
     assert decision.safe_reason_code == "expert_disabled"
 
 
+def test_expert_gate_disabled_config_ignores_invalid_timeout():
+    config = ExpertCollaborationConfig(
+        enabled=False,
+        branch_timeout_seconds="not-a-number",  # type: ignore[arg-type]
+    )
+
+    decision = ExpertEligibilityService(config).decide(
+        policy_decision=_policy(),
+        skill=_skill(),
+        index_statuses={"doc-1": {"status": "indexed"}},
+    )
+
+    assert decision.enabled is False
+    assert decision.safe_reason_code == "expert_disabled"
+
+
+@pytest.mark.parametrize(
+    "invalid_timeout",
+    ["not-a-number", None, float("nan"), float("inf")],
+)
+def test_expert_gate_enabled_config_invalid_timeout_uses_serial_fallback(
+    invalid_timeout,
+):
+    config = ExpertCollaborationConfig(
+        enabled=True,
+        branch_timeout_seconds=invalid_timeout,  # type: ignore[arg-type]
+    )
+
+    decision = ExpertEligibilityService(config).decide(
+        policy_decision=_policy(),
+        skill=_skill(),
+        index_statuses={"doc-1": {"status": "indexed"}},
+    )
+
+    assert decision.enabled is False
+    assert decision.safe_reason_code == "serial_fallback"
+
+
+@pytest.mark.parametrize("invalid_max_branches", ["many", None, float("nan"), float("inf")])
+def test_expert_gate_enabled_config_invalid_max_branches_uses_serial_fallback(
+    invalid_max_branches,
+):
+    config = ExpertCollaborationConfig(
+        enabled=True,
+        max_branches=invalid_max_branches,  # type: ignore[arg-type]
+    )
+
+    decision = ExpertEligibilityService(config).decide(
+        policy_decision=_policy(),
+        skill=_skill(),
+        index_statuses={"doc-1": {"status": "indexed"}},
+    )
+
+    assert decision.enabled is False
+    assert decision.safe_reason_code == "serial_fallback"
+
+
 def test_expert_gate_allows_eligible_policy_skill_and_index():
     config = ExpertCollaborationConfig(enabled=True, max_branches=3, branch_timeout_seconds=0.1)
     decision = ExpertEligibilityService(config).decide(
@@ -255,6 +312,22 @@ def test_expert_gate_allows_eligible_policy_skill_and_index():
     assert decision.enabled is True
     assert decision.safe_reason_code is None
     assert decision.max_branches == 3
+    assert decision.branch_timeout_seconds == 0.1
+
+
+def test_expert_gate_clamps_valid_config_ranges():
+    config = ExpertCollaborationConfig(enabled=True, max_branches=99, branch_timeout_seconds=0.001)
+
+    decision = ExpertEligibilityService(config).decide(
+        policy_decision=_policy(),
+        skill=_skill(),
+        index_statuses={"doc-1": {"status": "indexed"}},
+    )
+
+    assert decision.enabled is True
+    assert decision.safe_reason_code is None
+    assert decision.max_branches == 4
+    assert decision.branch_timeout_seconds == 0.01
 
 
 def test_expert_gate_blocks_non_eligible_category_policy_and_skill_mode():

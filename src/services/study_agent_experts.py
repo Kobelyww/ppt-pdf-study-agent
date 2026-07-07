@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -63,6 +64,10 @@ CREDENTIAL_LABEL_DENYLIST = (
     "credentials",
     "key",
 )
+DEFAULT_BRANCH_TIMEOUT_SECONDS = 1.0
+MIN_BRANCH_TIMEOUT_SECONDS = 0.01
+MIN_EXPERT_BRANCHES = 1
+MAX_EXPERT_BRANCHES = 4
 
 
 @dataclass(frozen=True)
@@ -254,6 +259,12 @@ class ExpertEligibilityService:
     ) -> ExpertGateDecision:
         if not self.config.enabled:
             return self._blocked("expert_disabled")
+        max_branches = _safe_branch_count(self.config.max_branches)
+        branch_timeout_seconds = _safe_branch_timeout_seconds(
+            self.config.branch_timeout_seconds
+        )
+        if max_branches is None or branch_timeout_seconds is None:
+            return self._blocked("serial_fallback")
         if policy_decision.category not in ELIGIBLE_CATEGORIES:
             return self._blocked("category_not_eligible")
         if policy_decision.status != "allowed":
@@ -267,8 +278,8 @@ class ExpertEligibilityService:
         return ExpertGateDecision(
             enabled=True,
             safe_reason_code=None,
-            max_branches=max(1, min(4, int(self.config.max_branches))),
-            branch_timeout_seconds=max(0.01, float(self.config.branch_timeout_seconds)),
+            max_branches=max_branches,
+            branch_timeout_seconds=branch_timeout_seconds,
         )
 
     def _blocked(self, reason: str) -> ExpertGateDecision:
@@ -276,7 +287,10 @@ class ExpertEligibilityService:
             enabled=False,
             safe_reason_code=reason,
             max_branches=0,
-            branch_timeout_seconds=max(0.01, float(self.config.branch_timeout_seconds)),
+            branch_timeout_seconds=_safe_branch_timeout_seconds(
+                self.config.branch_timeout_seconds
+            )
+            or DEFAULT_BRANCH_TIMEOUT_SECONDS,
         )
 
 
@@ -378,6 +392,34 @@ def _safe_int(value: Any) -> int | None:
     if isinstance(value, int) and value >= 0:
         return value
     return None
+
+
+def _safe_branch_count(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(numeric):
+        return None
+    try:
+        branch_count = int(numeric)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return max(MIN_EXPERT_BRANCHES, min(MAX_EXPERT_BRANCHES, branch_count))
+
+
+def _safe_branch_timeout_seconds(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        timeout = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(timeout):
+        return None
+    return max(MIN_BRANCH_TIMEOUT_SECONDS, timeout)
 
 
 def _safe_float(value: Any) -> float:
