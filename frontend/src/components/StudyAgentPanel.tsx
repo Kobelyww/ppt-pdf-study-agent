@@ -5,9 +5,11 @@ import {
   type ApiDocument,
   type StudyAgentQueryPayload,
   type StudyAgentResult,
+  type StudyAgentSkillPerformanceItem,
   type StudyBudget,
   type StudyRetrievalMode,
   type StudyTarget,
+  getStudyAgentSkillPerformance,
   queryStudyAgent,
 } from "../api";
 import EvidenceViewer from "./EvidenceViewer";
@@ -141,6 +143,47 @@ function SkillStatus({ skill }: { skill: StudyAgentResult["skill"] }) {
   );
 }
 
+function ExpertStatus({ expert }: { expert?: StudyAgentResult["expert"] }) {
+  if (!expert) return null;
+  return (
+    <div className="study-agent-expert" aria-label="Study Agent expert diagnostics">
+      <span>
+        <strong>Experts</strong> {expert.enabled ? "enabled" : "skipped"}
+      </span>
+      <span>
+        <strong>Branches</strong> {expert.branch_count ?? 0}
+      </span>
+      <span>
+        <strong>Timeouts</strong> {expert.timeout_count ?? 0}
+      </span>
+      {expert.fallback_reason ? (
+        <span className="study-agent-policy-warning">{expert.fallback_reason}</span>
+      ) : null}
+    </div>
+  );
+}
+
+function SkillPerformanceStatus({
+  item,
+}: {
+  item?: StudyAgentSkillPerformanceItem | null;
+}) {
+  if (!item) return null;
+  return (
+    <div className="study-agent-skill-performance" aria-label="Study Agent skill performance">
+      <span>
+        <strong>Review rate</strong> {Math.round(item.review_rate * 100)}%
+      </span>
+      <span>
+        <strong>Fallback rate</strong> {Math.round(item.fallback_rate * 100)}%
+      </span>
+      <span>
+        <strong>Expert runs</strong> {item.expert_run_count}
+      </span>
+    </div>
+  );
+}
+
 function StudyAgentPanel({
   apiClient,
   documents,
@@ -158,6 +201,8 @@ function StudyAgentPanel({
   const [preferredMode, setPreferredMode] = useState<StudyRetrievalMode | "">("");
   const [expectedTerms, setExpectedTerms] = useState("");
   const [result, setResult] = useState<StudyAgentResult | null>(null);
+  const [skillPerformance, setSkillPerformance] =
+    useState<StudyAgentSkillPerformanceItem | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const hasUserEditedSelection = useRef(false);
@@ -240,7 +285,20 @@ function StudyAgentPanel({
 
     setIsSubmitting(true);
     try {
-      setResult(await queryStudyAgent(apiClient, payload));
+      const data = await queryStudyAgent(apiClient, payload);
+      setResult(data);
+      setSkillPerformance(null);
+      const skill = data.skill ?? data.trace?.skill;
+      if (skill?.skill_name) {
+        const performance = await getStudyAgentSkillPerformance(
+          apiClient,
+          skill.skill_name,
+          skill.skill_version ?? undefined,
+        );
+        setSkillPerformance(performance.skills[0] ?? null);
+      } else {
+        setSkillPerformance(null);
+      }
     } catch (caught) {
       if (caught instanceof ApiError && caught.status === 401) {
         onAuthExpired();
@@ -438,6 +496,8 @@ function StudyAgentPanel({
             </div>
           ) : null}
           <SkillStatus skill={result.skill ?? result.trace?.skill} />
+          <ExpertStatus expert={result.expert ?? result.trace?.expert} />
+          <SkillPerformanceStatus item={skillPerformance} />
           {result.trace?.fallback_reason ? (
             <div className="warning-banner compact" role="status">
               Evidence index fallback: {result.trace.fallback_reason}

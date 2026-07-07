@@ -135,6 +135,35 @@ export interface StudyAgentWorkflowDiagnostic {
   stages: StudyAgentWorkflowStage[];
 }
 
+export interface StudyAgentExpertDiagnostic {
+  enabled?: boolean | null;
+  branch_count?: number | null;
+  timeout_count?: number | null;
+  failure_count?: number | null;
+  fallback_reason?: string | null;
+  branch_statuses?: Record<string, string>;
+}
+
+export interface StudyAgentSkillPerformanceItem {
+  skill_name: string;
+  skill_version: string;
+  run_count: number;
+  needs_review_count: number;
+  review_rate: number;
+  fallback_count: number;
+  fallback_rate: number;
+  expert_run_count: number;
+  expert_timeout_count: number;
+  average_confidence: number;
+  average_source_recall: number;
+  average_answer_term_recall: number;
+  review_reason_counts: Record<string, number>;
+}
+
+export interface StudyAgentSkillPerformanceSummary {
+  skills: StudyAgentSkillPerformanceItem[];
+}
+
 export interface StudyAgentTraceSummary {
   trace_id: string;
   request_id?: string | null;
@@ -152,6 +181,7 @@ export interface StudyAgentTraceSummary {
   latency_ms: number;
   skill?: StudyAgentSkillDiagnostic | null;
   workflow?: StudyAgentWorkflowDiagnostic | null;
+  expert?: StudyAgentExpertDiagnostic | null;
 }
 
 export interface StudyAgentPolicyDiagnostic {
@@ -241,6 +271,7 @@ export interface StudyAgentResult {
   policy?: StudyAgentPolicyDiagnostic | null;
   skill?: StudyAgentSkillDiagnostic | null;
   workflow?: StudyAgentWorkflowDiagnostic | null;
+  expert?: StudyAgentExpertDiagnostic | null;
   review_task?: StudyAgentReviewTaskDiagnostic | null;
   audit_metadata?: Record<string, unknown>;
 }
@@ -409,6 +440,24 @@ export async function listStudyAgentSkills(
     headers: apiClient.headers(),
   });
   return parseJson<StudyAgentSkillSummary[]>(response, "Failed to load Study Agent skills");
+}
+
+export async function getStudyAgentSkillPerformance(
+  apiClient: ApiClient,
+  skillName?: string,
+  skillVersion?: string,
+): Promise<StudyAgentSkillPerformanceSummary> {
+  const params = new URLSearchParams();
+  if (skillName) params.set("skill_name", skillName);
+  if (skillVersion) params.set("skill_version", skillVersion);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const response = await fetch(`${API_BASE}/api/study-agent/skills/performance${suffix}`, {
+    headers: apiClient.headers(),
+  });
+  return parseJson<StudyAgentSkillPerformanceSummary>(
+    response,
+    "Failed to load Study Agent skill performance",
+  );
 }
 
 export async function getStudyAgentMemorySummary(
