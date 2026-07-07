@@ -819,7 +819,8 @@ dd {
 .study-agent-skill,
 .study-agent-expert,
 .study-agent-skill-performance,
-.study-agent-review-task {
+.study-agent-review-task,
+.study-agent-run-status {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
@@ -833,7 +834,8 @@ dd {
 .study-agent-skill span,
 .study-agent-expert span,
 .study-agent-skill-performance span,
-.study-agent-review-task span {
+.study-agent-review-task span,
+.study-agent-run-status span {
   min-width: 0;
   padding: 6px 9px;
   border: 1px solid #d8dee8;
@@ -846,9 +848,20 @@ dd {
 .study-agent-skill strong,
 .study-agent-expert strong,
 .study-agent-skill-performance strong,
-.study-agent-review-task strong {
+.study-agent-review-task strong,
+.study-agent-run-status strong {
   color: #18212f;
   font-weight: 700;
+}
+
+.study-agent-run-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  width: 92px;
+  padding: 0 10px;
+  font-size: 0.8rem;
 }
 
 .study-agent-policy-warning {

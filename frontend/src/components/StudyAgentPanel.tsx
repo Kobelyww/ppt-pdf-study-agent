@@ -4,13 +4,16 @@ import {
   ApiError,
   type ApiDocument,
   type StudyAgentQueryPayload,
+  type StudyAgentRunDiagnostic,
   type StudyAgentResult,
   type StudyAgentSkillPerformanceItem,
   type StudyBudget,
   type StudyRetrievalMode,
   type StudyTarget,
+  archiveStudyAgentRun,
+  createStudyAgentRun,
   getStudyAgentSkillPerformance,
-  queryStudyAgent,
+  retryStudyAgentRun,
 } from "../api";
 import EvidenceViewer from "./EvidenceViewer";
 
@@ -43,6 +46,15 @@ const modeOptions: Array<
   { value: "agentic_rag", label: "Agentic" },
 ];
 
+const retryableRunStatuses = new Set(["failed", "cancelled", "timed_out", "needs_review"]);
+const archivableRunStatuses = new Set([
+  "completed",
+  "needs_review",
+  "failed",
+  "cancelled",
+  "timed_out",
+]);
+
 function readyDocuments(documents: ApiDocument[]) {
   return documents.filter((document) => document.status === "ready");
 }
@@ -60,6 +72,11 @@ function initialDocumentIds(documents: ApiDocument[], selectedDocumentId: string
     return [selectedDocumentId];
   }
   return ready[0]?.id ? [ready[0].id] : [];
+}
+
+function idSuffix(value: string | null | undefined) {
+  if (!value) return null;
+  return value.length > 8 ? value.slice(-8) : value;
 }
 
 function workflowStatusMarkerClass(status: string | null | undefined) {
@@ -108,6 +125,77 @@ function WorkflowTimeline({ workflow }: { workflow: StudyAgentResult["workflow"]
           </li>
         ))}
       </ol>
+    </div>
+  );
+}
+
+function RunStatus({
+  run,
+  canRetry,
+  canArchive,
+  isRetrying,
+  isArchiving,
+  onRetry,
+  onArchive,
+}: {
+  run?: StudyAgentRunDiagnostic | null;
+  canRetry: boolean;
+  canArchive: boolean;
+  isRetrying: boolean;
+  isArchiving: boolean;
+  onRetry: () => void;
+  onArchive: () => void;
+}) {
+  if (!run) return null;
+  const runSuffix = idSuffix(run.id);
+  const traceSuffix = idSuffix(run.trace_id);
+  const workflowSuffix = idSuffix(run.workflow_id);
+  return (
+    <div className="study-agent-run-status" aria-label="Study Agent run status">
+      <span>
+        <strong>Run</strong> {runSuffix ?? "unknown"}
+      </span>
+      <span>
+        <strong>Status</strong> {run.status}
+      </span>
+      <span>
+        <strong>Attempt</strong> {run.attempt}
+      </span>
+      {traceSuffix ? (
+        <span>
+          <strong>Trace</strong> {traceSuffix}
+        </span>
+      ) : null}
+      {workflowSuffix ? (
+        <span>
+          <strong>Workflow</strong> {workflowSuffix}
+        </span>
+      ) : null}
+      {run.error_code ? (
+        <span className="study-agent-policy-warning">
+          <strong>Error</strong> {run.error_code}
+        </span>
+      ) : null}
+      {canRetry ? (
+        <button
+          className="secondary-action study-agent-run-action"
+          type="button"
+          onClick={onRetry}
+          disabled={isRetrying || isArchiving}
+        >
+          {isRetrying ? "Retrying" : "Retry"}
+        </button>
+      ) : null}
+      {canArchive ? (
+        <button
+          className="secondary-action study-agent-run-action"
+          type="button"
+          onClick={onArchive}
+          disabled={isRetrying || isArchiving}
+        >
+          {isArchiving ? "Archiving" : "Archive"}
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -201,10 +289,13 @@ function StudyAgentPanel({
   const [preferredMode, setPreferredMode] = useState<StudyRetrievalMode | "">("");
   const [expectedTerms, setExpectedTerms] = useState("");
   const [result, setResult] = useState<StudyAgentResult | null>(null);
+  const [lastRunPayload, setLastRunPayload] = useState<StudyAgentQueryPayload | null>(null);
   const [skillPerformance, setSkillPerformance] =
     useState<StudyAgentSkillPerformanceItem | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [isArchiving, setIsArchiving] = useState(false);
   const hasUserEditedSelection = useRef(false);
   const readyIds = useMemo(() => new Set(ready.map((document) => document.id)), [ready]);
   const validSelectedIds = useMemo(
@@ -213,7 +304,12 @@ function StudyAgentPanel({
   );
   const hasReadySource = validSelectedIds.length > 0;
   const hasNonReadyDocuments = documents.some((document) => document.status !== "ready");
-  const canSubmit = hasReadySource && query.trim().length > 0 && !isSubmitting;
+  const isRunControlBusy = isSubmitting || isRetrying || isArchiving;
+  const canSubmit = hasReadySource && query.trim().length > 0 && !isRunControlBusy;
+  const canRetryRun = Boolean(
+    result?.run && lastRunPayload && retryableRunStatuses.has(result.run.status),
+  );
+  const canArchiveRun = Boolean(result?.run && archivableRunStatuses.has(result.run.status));
 
   useEffect(() => {
     setSelectedDocumentIds((current) => {
@@ -259,6 +355,29 @@ function StudyAgentPanel({
     }
   }
 
+  async function refreshSkillPerformance(data: StudyAgentResult) {
+    setSkillPerformance(null);
+    const skill = data.skill ?? data.trace?.skill;
+    if (!skill?.skill_name) return;
+    try {
+      const performance = await getStudyAgentSkillPerformance(
+        apiClient,
+        skill.skill_name,
+        skill.skill_version ?? undefined,
+      );
+      setSkillPerformance(performance.skills[0] ?? null);
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 401) {
+        onAuthExpired();
+      }
+      setSkillPerformance(null);
+    }
+  }
+
+  function safeErrorMessage(caught: unknown, fallback: string) {
+    return caught instanceof Error ? caught.message : fallback;
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
@@ -285,34 +404,52 @@ function StudyAgentPanel({
 
     setIsSubmitting(true);
     try {
-      const data = await queryStudyAgent(apiClient, payload);
+      setLastRunPayload(payload);
+      const data = await createStudyAgentRun(apiClient, payload);
       setResult(data);
-      setSkillPerformance(null);
-      const skill = data.skill ?? data.trace?.skill;
-      if (skill?.skill_name) {
-        try {
-          const performance = await getStudyAgentSkillPerformance(
-            apiClient,
-            skill.skill_name,
-            skill.skill_version ?? undefined,
-          );
-          setSkillPerformance(performance.skills[0] ?? null);
-        } catch (caught) {
-          if (caught instanceof ApiError && caught.status === 401) {
-            onAuthExpired();
-          }
-          setSkillPerformance(null);
-        }
-      } else {
-        setSkillPerformance(null);
-      }
+      await refreshSkillPerformance(data);
     } catch (caught) {
       if (caught instanceof ApiError && caught.status === 401) {
         onAuthExpired();
       }
-      setError(caught instanceof Error ? caught.message : "Failed to query Study Agent");
+      setError(safeErrorMessage(caught, "Failed to create Study Agent run"));
     } finally {
       setIsSubmitting(false);
+    }
+  }
+
+  async function handleRetryRun() {
+    if (!result?.run || !lastRunPayload) return;
+    setError(null);
+    setIsRetrying(true);
+    try {
+      const data = await retryStudyAgentRun(apiClient, result.run.id, lastRunPayload);
+      setResult(data);
+      await refreshSkillPerformance(data);
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 401) {
+        onAuthExpired();
+      }
+      setError(safeErrorMessage(caught, "Failed to retry Study Agent run"));
+    } finally {
+      setIsRetrying(false);
+    }
+  }
+
+  async function handleArchiveRun() {
+    if (!result?.run) return;
+    setError(null);
+    setIsArchiving(true);
+    try {
+      const archivedRun = await archiveStudyAgentRun(apiClient, result.run.id);
+      setResult((current) => (current ? { ...current, run: archivedRun } : current));
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 401) {
+        onAuthExpired();
+      }
+      setError(safeErrorMessage(caught, "Failed to archive Study Agent run"));
+    } finally {
+      setIsArchiving(false);
     }
   }
 
@@ -482,6 +619,15 @@ function StudyAgentPanel({
               </span>
             </div>
           ) : null}
+          <RunStatus
+            run={result.run}
+            canRetry={canRetryRun}
+            canArchive={canArchiveRun}
+            isRetrying={isRetrying}
+            isArchiving={isArchiving}
+            onRetry={handleRetryRun}
+            onArchive={handleArchiveRun}
+          />
           {result.policy ? (
             <div className="study-agent-policy" aria-label="Study Agent policy diagnostics">
               <span>

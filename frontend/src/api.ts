@@ -219,6 +219,37 @@ export interface StudyAgentReviewTaskDiagnostic {
   task_metadata?: Record<string, unknown>;
 }
 
+export interface StudyAgentRunDiagnostic {
+  id: string;
+  request_id: string;
+  status: string;
+  query_hash: string;
+  target: StudyTarget;
+  document_ids: string[];
+  preferred_mode?: StudyRetrievalMode | null;
+  selected_mode?: StudyRetrievalMode | null;
+  budget: StudyBudget;
+  skill_name?: string | null;
+  skill_version?: string | null;
+  expected_term_count: number;
+  workflow_id?: string | null;
+  trace_id?: string | null;
+  review_task_id?: string | null;
+  retry_of_run_id?: string | null;
+  attempt: number;
+  result_summary: Record<string, unknown>;
+  error_code?: string | null;
+  error_message?: string | null;
+  lifecycle_metadata: Record<string, unknown>;
+  created_at?: string | null;
+  updated_at?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  cancelled_at?: string | null;
+  paused_at?: string | null;
+  archived_at?: string | null;
+}
+
 export interface StudyAgentMemorySummary {
   preferences: Record<string, string>;
   review_reason_counts: Record<string, number>;
@@ -273,6 +304,7 @@ export interface StudyAgentResult {
   workflow?: StudyAgentWorkflowDiagnostic | null;
   expert?: StudyAgentExpertDiagnostic | null;
   review_task?: StudyAgentReviewTaskDiagnostic | null;
+  run?: StudyAgentRunDiagnostic | null;
   audit_metadata?: Record<string, unknown>;
 }
 
@@ -431,6 +463,42 @@ export async function queryStudyAgent(
     body: JSON.stringify(payload),
   });
   return parseJson<StudyAgentResult>(response, "Failed to query Study Agent");
+}
+
+export async function createStudyAgentRun(
+  apiClient: ApiClient,
+  payload: StudyAgentQueryPayload,
+): Promise<StudyAgentResult> {
+  const response = await fetch(`${API_BASE}/api/study-agent/runs`, {
+    method: "POST",
+    headers: apiClient.headers({ "content-type": "application/json" }),
+    body: JSON.stringify(payload),
+  });
+  return parseJson<StudyAgentResult>(response, "Failed to create Study Agent run");
+}
+
+export async function retryStudyAgentRun(
+  apiClient: ApiClient,
+  runId: string,
+  payload: StudyAgentQueryPayload,
+): Promise<StudyAgentResult> {
+  const response = await fetch(`${API_BASE}/api/study-agent/runs/${runId}/retry`, {
+    method: "POST",
+    headers: apiClient.headers({ "content-type": "application/json" }),
+    body: JSON.stringify(payload),
+  });
+  return parseJson<StudyAgentResult>(response, "Failed to retry Study Agent run");
+}
+
+export async function archiveStudyAgentRun(
+  apiClient: ApiClient,
+  runId: string,
+): Promise<StudyAgentRunDiagnostic> {
+  const response = await fetch(`${API_BASE}/api/study-agent/runs/${runId}/archive`, {
+    method: "POST",
+    headers: apiClient.headers(),
+  });
+  return parseJson<StudyAgentRunDiagnostic>(response, "Failed to archive Study Agent run");
 }
 
 export async function listStudyAgentSkills(
