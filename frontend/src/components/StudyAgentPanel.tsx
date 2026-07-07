@@ -55,6 +55,11 @@ const archivableRunStatuses = new Set([
   "timed_out",
 ]);
 
+type LastRunContext = {
+  runId: string;
+  payload: StudyAgentQueryPayload;
+};
+
 function readyDocuments(documents: ApiDocument[]) {
   return documents.filter((document) => document.status === "ready");
 }
@@ -133,6 +138,7 @@ function RunStatus({
   run,
   canRetry,
   canArchive,
+  isRunControlBusy,
   isRetrying,
   isArchiving,
   onRetry,
@@ -141,6 +147,7 @@ function RunStatus({
   run?: StudyAgentRunDiagnostic | null;
   canRetry: boolean;
   canArchive: boolean;
+  isRunControlBusy: boolean;
   isRetrying: boolean;
   isArchiving: boolean;
   onRetry: () => void;
@@ -181,7 +188,7 @@ function RunStatus({
           className="secondary-action study-agent-run-action"
           type="button"
           onClick={onRetry}
-          disabled={isRetrying || isArchiving}
+          disabled={isRunControlBusy}
         >
           {isRetrying ? "Retrying" : "Retry"}
         </button>
@@ -191,7 +198,7 @@ function RunStatus({
           className="secondary-action study-agent-run-action"
           type="button"
           onClick={onArchive}
-          disabled={isRetrying || isArchiving}
+          disabled={isRunControlBusy}
         >
           {isArchiving ? "Archiving" : "Archive"}
         </button>
@@ -289,7 +296,7 @@ function StudyAgentPanel({
   const [preferredMode, setPreferredMode] = useState<StudyRetrievalMode | "">("");
   const [expectedTerms, setExpectedTerms] = useState("");
   const [result, setResult] = useState<StudyAgentResult | null>(null);
-  const [lastRunPayload, setLastRunPayload] = useState<StudyAgentQueryPayload | null>(null);
+  const [lastRunContext, setLastRunContext] = useState<LastRunContext | null>(null);
   const [skillPerformance, setSkillPerformance] =
     useState<StudyAgentSkillPerformanceItem | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -307,9 +314,14 @@ function StudyAgentPanel({
   const isRunControlBusy = isSubmitting || isRetrying || isArchiving;
   const canSubmit = hasReadySource && query.trim().length > 0 && !isRunControlBusy;
   const canRetryRun = Boolean(
-    result?.run && lastRunPayload && retryableRunStatuses.has(result.run.status),
+    result?.run &&
+      lastRunContext?.runId === result.run.id &&
+      retryableRunStatuses.has(result.run.status) &&
+      !isRunControlBusy,
   );
-  const canArchiveRun = Boolean(result?.run && archivableRunStatuses.has(result.run.status));
+  const canArchiveRun = Boolean(
+    result?.run && archivableRunStatuses.has(result.run.status) && !isRunControlBusy,
+  );
 
   useEffect(() => {
     setSelectedDocumentIds((current) => {
@@ -404,8 +416,10 @@ function StudyAgentPanel({
 
     setIsSubmitting(true);
     try {
-      setLastRunPayload(payload);
       const data = await createStudyAgentRun(apiClient, payload);
+      if (data.run?.id) {
+        setLastRunContext({ runId: data.run.id, payload });
+      }
       setResult(data);
       await refreshSkillPerformance(data);
     } catch (caught) {
@@ -419,11 +433,16 @@ function StudyAgentPanel({
   }
 
   async function handleRetryRun() {
-    if (!result?.run || !lastRunPayload) return;
+    const runId = result?.run?.id;
+    const runContext = lastRunContext;
+    if (isRunControlBusy || !runId || !runContext || runContext.runId !== runId) return;
     setError(null);
     setIsRetrying(true);
     try {
-      const data = await retryStudyAgentRun(apiClient, result.run.id, lastRunPayload);
+      const data = await retryStudyAgentRun(apiClient, runId, runContext.payload);
+      if (data.run?.id) {
+        setLastRunContext({ runId: data.run.id, payload: runContext.payload });
+      }
       setResult(data);
       await refreshSkillPerformance(data);
     } catch (caught) {
@@ -437,7 +456,7 @@ function StudyAgentPanel({
   }
 
   async function handleArchiveRun() {
-    if (!result?.run) return;
+    if (isRunControlBusy || !result?.run) return;
     setError(null);
     setIsArchiving(true);
     try {
@@ -623,6 +642,7 @@ function StudyAgentPanel({
             run={result.run}
             canRetry={canRetryRun}
             canArchive={canArchiveRun}
+            isRunControlBusy={isRunControlBusy}
             isRetrying={isRetrying}
             isArchiving={isArchiving}
             onRetry={handleRetryRun}
