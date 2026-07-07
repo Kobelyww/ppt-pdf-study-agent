@@ -251,6 +251,40 @@ def test_mark_failed_persists_only_safe_error_labels(tmp_path):
         assert "ValueError" not in serialized
 
 
+def test_unsafe_run_id_and_status_do_not_leak_in_exception_messages(tmp_path):
+    service = _service(tmp_path)
+    run = service.create_run(owner_id="user-1", request_id="req-1", payload=_payload())
+    unsafe_run_id = "/tmp/private sk-secret-token"
+    unsafe_status = "Traceback sk-secret-token"
+
+    with pytest.raises(StudyAgentRunNotFound) as missing_run:
+        service.cancel(owner_id="user-1", run_id=unsafe_run_id)
+    assert str(missing_run.value) == "Study Agent run not found"
+
+    with pytest.raises(StudyAgentRunConflict) as unknown_status:
+        service.list_runs(owner_id="user-1", status="/tmp/sk-secret-token")
+    assert str(unknown_status.value) == "Unknown run status"
+
+    with pytest.raises(StudyAgentRunConflict) as invalid_terminal:
+        service.mark_terminal(
+            owner_id="user-1",
+            run_id=run["id"],
+            status=unsafe_status,
+        )
+    assert str(invalid_terminal.value) == "Unknown run status"
+
+    for message in (
+        str(missing_run.value),
+        str(unknown_status.value),
+        str(invalid_terminal.value),
+    ):
+        assert "/tmp" not in message
+        assert "sk-secret-token" not in message
+        assert "Traceback" not in message
+        assert unsafe_run_id not in message
+        assert unsafe_status not in message
+
+
 def test_control_transitions_enforce_allowed_statuses(tmp_path):
     service = _service(tmp_path)
     run = service.create_run(owner_id="user-1", request_id="req-1", payload=_payload())
@@ -287,6 +321,54 @@ def test_retry_child_links_to_parent_without_reusing_raw_query(tmp_path):
     assert child["retry_of_run_id"] == parent["id"]
     assert child["attempt"] == 2
     assert "fresh retry query" not in str(child).lower()
+
+
+def test_create_retry_run_validates_parent_and_child_in_one_transaction(tmp_path):
+    class NoPublicCreateRunForRetryService(StudyAgentRunService):
+        def create_run(self, **kwargs):  # noqa: ANN003
+            if kwargs.get("retry_of_run_id") is not None:
+                raise AssertionError("create_retry_run must not delegate to public create_run")
+            return super().create_run(**kwargs)
+
+    base_service = _service(tmp_path)
+    service = NoPublicCreateRunForRetryService(base_service.session_factory)
+    parent = service.create_run(owner_id="user-1", request_id="req-1", payload=_payload())
+    service.mark_running(owner_id="user-1", run_id=parent["id"])
+    service.mark_terminal(
+        owner_id="user-1",
+        run_id=parent["id"],
+        status="failed",
+        error_code="bad_study_request",
+        error_message="bad_study_request",
+    )
+
+    child = service.create_retry_run(
+        owner_id="user-1",
+        request_id="req-2",
+        parent_run_id=parent["id"],
+        payload={**_payload(), "query": "Fresh retry query"},
+    )
+
+    assert child["retry_of_run_id"] == parent["id"]
+    assert child["attempt"] == 2
+    assert service.get_run(owner_id="user-1", run_id=child["id"])["id"] == child["id"]
+
+
+def test_create_retry_run_unsafe_parent_id_uses_generic_exception_message(tmp_path):
+    service = _service(tmp_path)
+
+    with pytest.raises(StudyAgentRunNotFound) as exc_info:
+        service.create_retry_run(
+            owner_id="user-1",
+            request_id="req-2",
+            parent_run_id="/tmp/private sk-secret-token",
+            payload=_payload(),
+        )
+
+    message = str(exc_info.value)
+    assert message == "Study Agent run not found"
+    assert "/tmp" not in message
+    assert "sk-secret-token" not in message
 
 
 def test_owner_isolation_for_detail_and_controls(tmp_path):

@@ -135,24 +135,12 @@ class StudyAgentRunService:
         retry_of_run_id: str | None = None,
         attempt: int = 1,
     ) -> dict:
-        safe_payload = _safe_request_payload(payload)
-        record = StudyAgentRunRecord(
-            id=f"run-{uuid4().hex}",
+        record = _build_run_record(
             owner_id=owner_id,
             request_id=request_id,
-            status="queued",
-            query_hash=_query_hash(str(payload.get("query") or "")),
-            target=safe_payload["target"],
-            document_ids=safe_payload["document_ids"],
-            preferred_mode=safe_payload["preferred_mode"],
-            budget=safe_payload["budget"],
-            skill_name=safe_payload["skill_name"],
-            skill_version=safe_payload["skill_version"],
-            expected_term_count=safe_payload["expected_term_count"],
-            retry_of_run_id=_safe_run_id(retry_of_run_id),
-            attempt=max(1, int(attempt or 1)),
-            result_summary={},
-            lifecycle_metadata={},
+            payload=payload,
+            retry_of_run_id=retry_of_run_id,
+            attempt=attempt,
         )
 
         with self.session_factory() as session:
@@ -169,20 +157,20 @@ class StudyAgentRunService:
         payload: dict,
     ) -> dict:
         with self.session_factory() as session:
-            parent = self._get_owned_record(session, owner_id, parent_run_id)
+            parent = self._get_owned_record(session, owner_id, parent_run_id, for_update=True)
             if parent.status not in RETRYABLE_STATUSES:
-                raise StudyAgentRunConflict(
-                    f"Cannot retry run {parent.id} from status {parent.status}."
-                )
-            attempt = parent.attempt + 1
+                raise StudyAgentRunConflict("Invalid run transition")
 
-        return self.create_run(
-            owner_id=owner_id,
-            request_id=request_id,
-            payload=payload,
-            retry_of_run_id=parent_run_id,
-            attempt=attempt,
-        )
+            record = _build_run_record(
+                owner_id=owner_id,
+                request_id=request_id,
+                payload=payload,
+                retry_of_run_id=parent.id,
+                attempt=parent.attempt + 1,
+            )
+            session.add(record)
+            session.commit()
+            return _serialize_run(record)
 
     def list_runs(
         self,
@@ -196,7 +184,7 @@ class StudyAgentRunService:
             query = select(StudyAgentRunRecord).where(StudyAgentRunRecord.owner_id == owner_id)
             if status is not None:
                 if status not in RUN_STATUSES:
-                    raise StudyAgentRunConflict(f"Unknown run status: {status}")
+                    raise StudyAgentRunConflict("Unknown run status")
                 query = query.where(StudyAgentRunRecord.status == status)
             elif not include_archived:
                 query = query.where(StudyAgentRunRecord.status != "archived")
@@ -238,7 +226,7 @@ class StudyAgentRunService:
         error_message: str | None = None,
     ) -> dict:
         if status not in {"completed", "needs_review", "failed", "timed_out"}:
-            raise StudyAgentRunConflict(f"Unsupported terminal status: {status}")
+            raise StudyAgentRunConflict("Unknown run status")
 
         safe_summary = _sanitize_result_summary(result_summary or {})
         with self.session_factory() as session:
@@ -286,15 +274,28 @@ class StudyAgentRunService:
             session.commit()
             return _serialize_run(record)
 
-    def _get_owned_record(self, session, owner_id: str, run_id: str) -> StudyAgentRunRecord:
-        record = session.scalar(
-            select(StudyAgentRunRecord).where(
-                StudyAgentRunRecord.owner_id == owner_id,
-                StudyAgentRunRecord.id == run_id,
-            )
+    def _get_owned_record(
+        self,
+        session,
+        owner_id: str,
+        run_id: str,
+        *,
+        for_update: bool = False,
+    ) -> StudyAgentRunRecord:
+        safe_run_id = _safe_run_id(run_id)
+        if safe_run_id is None:
+            raise StudyAgentRunNotFound("Study Agent run not found")
+
+        query = select(StudyAgentRunRecord).where(
+            StudyAgentRunRecord.owner_id == owner_id,
+            StudyAgentRunRecord.id == safe_run_id,
         )
+        if for_update:
+            query = query.with_for_update()
+
+        record = session.scalar(query)
         if record is None:
-            raise StudyAgentRunNotFound(f"Study Agent run not found: {run_id}")
+            raise StudyAgentRunNotFound("Study Agent run not found")
         return record
 
     def _transition(
@@ -305,13 +306,11 @@ class StudyAgentRunService:
         next_status: str,
     ) -> StudyAgentRunRecord:
         if next_status not in RUN_STATUSES:
-            raise StudyAgentRunConflict(f"Unknown run status: {next_status}")
+            raise StudyAgentRunConflict("Unknown run status")
 
         record = self._get_owned_record(session, owner_id, run_id)
         if next_status not in _ALLOWED_TRANSITIONS.get(record.status, set()):
-            raise StudyAgentRunConflict(
-                f"Cannot transition run {record.id} from {record.status} to {next_status}."
-            )
+            raise StudyAgentRunConflict("Invalid run transition")
 
         record.status = next_status
         metadata = dict(record.lifecycle_metadata or {})
@@ -319,6 +318,35 @@ class StudyAgentRunService:
         metadata["last_transition"] = next_status
         record.lifecycle_metadata = metadata
         return record
+
+
+def _build_run_record(
+    *,
+    owner_id: str,
+    request_id: str,
+    payload: Mapping[str, Any],
+    retry_of_run_id: str | None = None,
+    attempt: int = 1,
+) -> StudyAgentRunRecord:
+    safe_payload = _safe_request_payload(payload)
+    return StudyAgentRunRecord(
+        id=f"run-{uuid4().hex}",
+        owner_id=owner_id,
+        request_id=request_id,
+        status="queued",
+        query_hash=_query_hash(str(payload.get("query") or "")),
+        target=safe_payload["target"],
+        document_ids=safe_payload["document_ids"],
+        preferred_mode=safe_payload["preferred_mode"],
+        budget=safe_payload["budget"],
+        skill_name=safe_payload["skill_name"],
+        skill_version=safe_payload["skill_version"],
+        expected_term_count=safe_payload["expected_term_count"],
+        retry_of_run_id=_safe_run_id(retry_of_run_id),
+        attempt=max(1, int(attempt or 1)),
+        result_summary={},
+        lifecycle_metadata={},
+    )
 
 
 def _safe_request_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
