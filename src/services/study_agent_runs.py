@@ -65,6 +65,19 @@ SAFE_ERROR_LABELS = {
     "run_failed",
     "unknown",
 }
+SAFE_TARGETS = {"answer", "question", "outline_fragment"}
+SAFE_RETRIEVAL_MODES = {"simple_rag", "graph_rag_lite", "agentic_rag"}
+SAFE_BUDGETS = {"low", "balanced", "high"}
+SAFE_SKILL_NAMES = {
+    "concept_explanation",
+    "practice_question",
+    "outline_fragment",
+    "concept_relation",
+    "multi_document_synthesis",
+}
+SAFE_SKILL_VERSIONS = {"v1"}
+SAFE_DOCUMENT_ID_PATTERN = re.compile(r"^[A-Za-z0-9_:\.-]{1,128}$")
+UNSAFE_DOCUMENT_ID_TERMS = ("token", "secret", "password", "authorization")
 _ALLOWED_TRANSITIONS = {
     "queued": {"running", "paused", "cancelled"},
     "running": {"completed", "needs_review", "failed", "paused", "cancelled", "timed_out"},
@@ -293,12 +306,18 @@ def _safe_request_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         expected_term_count = _safe_int(payload.get("expected_term_count"))
 
     return {
-        "target": _safe_string(payload.get("target"), default="answer"),
+        "target": _safe_allowlisted_label(
+            payload.get("target"), SAFE_TARGETS, default="unknown"
+        ),
         "document_ids": _safe_document_ids(payload.get("document_ids")),
-        "preferred_mode": _safe_optional_string(payload.get("preferred_mode")),
-        "budget": _safe_optional_string(payload.get("budget")),
-        "skill_name": _safe_optional_string(payload.get("skill_name")),
-        "skill_version": _safe_optional_string(payload.get("skill_version")),
+        "preferred_mode": _safe_allowlisted_label(
+            payload.get("preferred_mode"), SAFE_RETRIEVAL_MODES
+        ),
+        "budget": _safe_allowlisted_label(payload.get("budget"), SAFE_BUDGETS),
+        "skill_name": _safe_allowlisted_label(payload.get("skill_name"), SAFE_SKILL_NAMES),
+        "skill_version": _safe_allowlisted_label(
+            payload.get("skill_version"), SAFE_SKILL_VERSIONS
+        ),
         "expected_term_count": expected_term_count,
     }
 
@@ -379,14 +398,29 @@ def _safe_document_ids(value: Any) -> list[str]:
     ids: list[str] = []
     for item in value:
         label = _safe_optional_string(item)
-        if label is not None:
+        if _is_safe_document_id(label):
             ids.append(label)
     return ids
 
 
-def _safe_string(value: Any, *, default: str) -> str:
-    safe = _safe_optional_string(value)
-    return safe if safe is not None else default
+def _is_safe_document_id(label: str | None) -> bool:
+    if label is None:
+        return False
+    normalized = label.lower()
+    if any(term in normalized for term in UNSAFE_DOCUMENT_ID_TERMS):
+        return False
+    if "/" in label or "\\" in label:
+        return False
+    return bool(SAFE_DOCUMENT_ID_PATTERN.fullmatch(label))
+
+
+def _safe_allowlisted_label(
+    value: Any, allowed: set[str], *, default: str | None = None
+) -> str | None:
+    label = _safe_optional_string(value)
+    if label is None:
+        return default
+    return label if label in allowed else default
 
 
 def _safe_optional_string(value: Any) -> str | None:

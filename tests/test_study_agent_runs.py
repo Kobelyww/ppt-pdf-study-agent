@@ -53,6 +53,39 @@ def test_create_run_stores_safe_request_metadata_without_raw_query(tmp_path):
     assert "private derivative note" not in str(run).lower()
 
 
+def test_create_run_drops_unsafe_request_metadata_labels(tmp_path):
+    service = _service(tmp_path)
+
+    run = service.create_run(
+        owner_id="user-1",
+        request_id="req-1",
+        payload={
+            "query": "Safe hash only",
+            "target": "/tmp/target sk-secret-token",
+            "document_ids": ["doc-safe-1", "/Users/private.pdf", "sk-secret-token"],
+            "preferred_mode": "../../agentic_rag",
+            "budget": "sk-secret-token",
+            "skill_name": "concept_explanation",
+            "skill_version": "v1",
+            "expected_terms": ["a"],
+        },
+    )
+
+    assert run["target"] == "unknown"
+    assert run["preferred_mode"] is None
+    assert run["budget"] is None
+    assert run["document_ids"] == ["doc-safe-1"]
+    assert run["skill_name"] == "concept_explanation"
+    assert run["skill_version"] == "v1"
+    assert run["query_hash"].startswith("sha256:")
+
+    serialized = str(run)
+    assert "/tmp" not in serialized
+    assert "/Users/private" not in serialized
+    assert "sk-secret-token" not in serialized
+    assert "../../" not in serialized
+
+
 def test_mark_completed_stores_safe_result_summary_only(tmp_path):
     service = _service(tmp_path)
     run = service.create_run(owner_id="user-1", request_id="req-1", payload=_payload())
