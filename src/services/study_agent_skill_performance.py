@@ -76,7 +76,7 @@ def _summarize_bucket(
                 reason = stage.get("review_reason") or stage.get(
                     "output_summary", {}
                 ).get("review_reason")
-                if isinstance(reason, str):
+                if isinstance(reason, str) and reason != "unknown":
                     review_reasons[reason] += 1
 
     return {

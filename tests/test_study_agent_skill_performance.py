@@ -174,3 +174,31 @@ def test_skill_performance_summary_can_filter_skill_version():
     )
 
     assert [item["skill_name"] for item in summary["skills"]] == ["practice_question"]
+
+
+def test_skill_performance_summary_drops_unknown_review_reason_counts():
+    Session = _session_factory()
+    with Session() as session:
+        session.add_all(
+            [
+                _trace(
+                    trace_id="trace-safe",
+                    owner_id="owner-1",
+                    needs_review=True,
+                    review_reason="low_confidence",
+                ),
+                _trace(
+                    trace_id="trace-unsafe",
+                    owner_id="owner-1",
+                    needs_review=True,
+                    review_reason="custom_lowercase_reason",
+                ),
+            ]
+        )
+        session.commit()
+
+    summary = StudyAgentSkillPerformanceService(Session).summary(owner_id="owner-1")
+
+    counts = summary["skills"][0]["review_reason_counts"]
+    assert counts == {"low_confidence": 1}
+    assert "unknown" not in counts
