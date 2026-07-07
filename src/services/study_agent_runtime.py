@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from time import perf_counter
 from typing import Any
@@ -7,12 +8,13 @@ from typing import Any
 from src.knowledge.knowledge_graph import KnowledgeGraph
 from src.services.agentic_rag import AgenticRAGPlanner
 from src.services.rag_route_policy import (
+    RAGRoutePolicyDecision,
     RAGReadinessSnapshot,
     RAGRoutePolicyConfig,
     RAGRoutePolicyService,
 )
 from src.services.rag_router import RAGStrategyRouter, RetrievalMode
-from src.services.rag_service import RAGService
+from src.services.rag_service import Chunk, RAGService
 from src.services.study_agent import (
     EvidenceCollector,
     StudyAgentOrchestrator,
@@ -29,6 +31,14 @@ from src.services.study_agent_documents import (
 from src.services.study_agent_index import (
     StudyDocumentIndexService,
     persisted_chunk_set_is_complete,
+)
+from src.services.study_agent_experts import (
+    DeterministicExpertBranchRunner,
+    ExpertBranchResult,
+    ExpertCollaborationConfig,
+    ExpertEligibilityService,
+    ExpertExecutionSummary,
+    ExpertGateDecision,
 )
 from src.services.study_agent_skills import StudySkill, StudySkillRegistry
 from src.services.study_agent_workflow import (
@@ -59,6 +69,8 @@ class StudyAgentRuntimeService:
         route_policy: RAGRoutePolicyService | None = None,
         skill_registry: StudySkillRegistry | None = None,
         readiness_provider: Callable[[], RAGReadinessSnapshot | None] | None = None,
+        expert_config: ExpertCollaborationConfig | None = None,
+        expert_runner: Any | None = None,
         top_k: int = 5,
     ) -> None:
         self.session_factory = session_factory
@@ -77,6 +89,8 @@ class StudyAgentRuntimeService:
         self.route_policy = route_policy or RAGRoutePolicyService(RAGRoutePolicyConfig())
         self.skill_registry = skill_registry or StudySkillRegistry()
         self.readiness_provider = readiness_provider or (lambda: None)
+        self.expert_config = expert_config or ExpertCollaborationConfig()
+        self.expert_runner = expert_runner or DeterministicExpertBranchRunner()
         self.top_k = top_k
 
     async def run(self, payload: dict[str, Any]):
@@ -263,11 +277,34 @@ class StudyAgentRuntimeService:
                 "review_gate_profile": skill.review_gate_profile,
             },
         )
+        expert_gate = ExpertEligibilityService(self.expert_config).decide(
+            policy_decision=policy_decision,
+            skill=skill,
+            index_statuses=index_statuses,
+        )
+        expert_chunks = self._expert_chunks(
+            chunks,
+            owner_id=request.authenticated_user_id,
+            document_ids=requested_document_ids,
+        )
+        expert_summary = await self._run_expert_gate(
+            gate=expert_gate,
+            chunks=expert_chunks,
+            category=policy_decision.category,
+            policy_decision=policy_decision,
+            skill=skill,
+        )
+        safe_expert = expert_summary.to_safe_dict()
+        add_stage(
+            WorkflowStageName.EXPERT_GATE,
+            output_summary=self._expert_stage_summary(safe_expert),
+        )
         orchestrator_payload = {
             **payload,
             "preferred_mode": selected_mode.value,
             "policy_decision": safe_policy,
             "skill": safe_skill,
+            "expert": safe_expert,
         }
 
         rag_service = RAGService()
@@ -363,6 +400,7 @@ class StudyAgentRuntimeService:
         result.audit_metadata["index_statuses"] = index_statuses
         result.audit_metadata["policy"] = safe_policy
         result.audit_metadata["skill"] = safe_skill
+        result.audit_metadata["expert"] = safe_expert
         result.audit_metadata["latency_ms"] = round((perf_counter() - started_at) * 1000, 3)
         result.audit_metadata["workflow"] = workflow
         return result
@@ -378,3 +416,110 @@ class StudyAgentRuntimeService:
         if RetrievalMode.SIMPLE in skill.allowed_retrieval_modes:
             return RetrievalMode.SIMPLE
         return skill.allowed_retrieval_modes[0]
+
+    async def _run_expert_gate(
+        self,
+        *,
+        gate: ExpertGateDecision,
+        chunks: tuple[Chunk, ...],
+        category: str,
+        policy_decision: RAGRoutePolicyDecision,
+        skill: StudySkill,
+    ) -> ExpertExecutionSummary:
+        if not gate.enabled:
+            return ExpertExecutionSummary(
+                enabled=False,
+                fallback_reason=gate.safe_reason_code,
+            )
+
+        try:
+            summary = await asyncio.wait_for(
+                self.expert_runner.run(
+                    chunks=chunks,
+                    category=category,
+                    max_branches=gate.max_branches,
+                    policy_decision=policy_decision,
+                    skill=skill,
+                ),
+                timeout=gate.branch_timeout_seconds,
+            )
+            if isinstance(summary, ExpertExecutionSummary):
+                return summary
+            return self._expert_branch_error_summary()
+        except asyncio.TimeoutError:
+            return ExpertExecutionSummary(
+                enabled=True,
+                branch_results=(
+                    ExpertBranchResult(
+                        branch_name="retrieval_expert",
+                        status="timeout",
+                        safe_reason_code="branch_timeout",
+                    ),
+                ),
+                fallback_reason="branch_timeout",
+            )
+        except Exception:
+            return self._expert_branch_error_summary()
+
+    def _expert_branch_error_summary(self) -> ExpertExecutionSummary:
+        return ExpertExecutionSummary(
+            enabled=True,
+            branch_results=(
+                ExpertBranchResult(
+                    branch_name="retrieval_expert",
+                    status="failed",
+                    safe_reason_code="branch_error",
+                ),
+            ),
+            fallback_reason="branch_error",
+        )
+
+    def _expert_chunks(
+        self,
+        chunks: list[dict[str, Any]],
+        *,
+        owner_id: str | None,
+        document_ids: set[str],
+    ) -> tuple[Chunk, ...]:
+        expert_chunks: list[Chunk] = []
+        for raw_chunk in chunks:
+            if not isinstance(raw_chunk, dict):
+                continue
+
+            metadata = raw_chunk.get("metadata") or {}
+            if not isinstance(metadata, dict):
+                continue
+
+            document_id = str(metadata.get("document_id") or "").strip()
+            if document_ids and document_id not in document_ids:
+                continue
+
+            chunk_owner_id = str(metadata.get("owner_id") or "").strip()
+            if owner_id and chunk_owner_id != owner_id:
+                continue
+
+            content = str(raw_chunk.get("content") or "").strip()
+            if not content:
+                continue
+
+            expert_chunks.append(
+                Chunk(
+                    content=content,
+                    source=str(raw_chunk.get("source") or ""),
+                    metadata=metadata.copy(),
+                    score=0.0,
+                )
+            )
+        return tuple(expert_chunks)
+
+    def _expert_stage_summary(self, safe_expert: dict[str, Any]) -> dict[str, Any]:
+        output = {
+            "expert_enabled": bool(safe_expert.get("enabled")),
+            "expert_branch_count": int(safe_expert.get("branch_count") or 0),
+            "expert_timeout_count": int(safe_expert.get("timeout_count") or 0),
+            "expert_failure_count": int(safe_expert.get("failure_count") or 0),
+        }
+        fallback_reason = safe_expert.get("fallback_reason")
+        if isinstance(fallback_reason, str):
+            output["expert_fallback_reason"] = fallback_reason
+        return output

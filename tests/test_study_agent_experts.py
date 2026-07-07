@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import pytest
+
 from src.services.rag_route_policy import RAGRoutePolicyDecision
 from src.services.rag_router import RetrievalMode
+from src.services.rag_service import Chunk
 from src.services.study_agent import StudyBudget, StudyTarget
 from src.services.study_agent_experts import (
+    DeterministicExpertBranchRunner,
     ExpertBranchResult,
     ExpertCollaborationConfig,
     ExpertEligibilityService,
@@ -86,6 +90,70 @@ def test_expert_branch_result_safe_dict_omits_raw_values():
     assert "sk-secret-token" not in serialized
     assert "/tmp/raw-secret" not in serialized
     assert "generated answer" not in serialized
+
+
+@pytest.mark.asyncio
+async def test_deterministic_expert_runner_returns_safe_branch_summary():
+    chunks = (
+        Chunk(
+            content="PRIVATE raw chunk content about derivatives should never persist.",
+            source="document:doc-study:chunk:0",
+            metadata={
+                "owner_id": "user-1",
+                "document_id": "doc-study",
+                "concept_id": "derivative",
+                "raw_path": "/Users/alice/private/calculus.pdf",
+            },
+            score=0.8,
+        ),
+        Chunk(
+            content="Generated answer seed text and hidden prompt bait.",
+            source="document:doc-second:chunk:0",
+            metadata={
+                "owner_id": "user-1",
+                "document_id": "doc-second",
+                "concept_id": "integral",
+                "token": "sk-secret-token",
+            },
+            score=0.6,
+        ),
+    )
+
+    summary = await DeterministicExpertBranchRunner().run(
+        chunks=chunks,
+        category="multi_document_synthesis",
+        max_branches=3,
+    )
+
+    assert summary.enabled is True
+    assert [branch.branch_name for branch in summary.branch_results] == [
+        "retrieval_expert",
+        "graph_expert",
+        "synthesis_expert",
+    ]
+    assert [branch.status for branch in summary.branch_results] == [
+        "passed",
+        "passed",
+        "passed",
+    ]
+    safe = summary.to_safe_dict()
+    assert safe == {
+        "enabled": True,
+        "branch_count": 3,
+        "timeout_count": 0,
+        "failure_count": 0,
+        "branch_statuses": {
+            "retrieval_expert": "passed",
+            "graph_expert": "passed",
+            "synthesis_expert": "passed",
+        },
+    }
+    serialized = str(safe).lower()
+    assert "private raw chunk content" not in serialized
+    assert "generated answer" not in serialized
+    assert "hidden prompt" not in serialized
+    assert "/users/alice" not in serialized
+    assert "sk-secret-token" not in serialized
 
 
 def test_expert_branch_result_counts_only_opaque_safe_source_ids():

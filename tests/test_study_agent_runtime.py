@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 
 import pytest
@@ -15,6 +16,7 @@ from src.services.rag_route_policy import (
     RAGRoutePolicyService,
 )
 from src.services.rag_router import RetrievalMode
+from src.services.study_agent_experts import ExpertCollaborationConfig
 from src.services.study_agent_documents import StudyAgentDocumentError, StudyDocumentChunker
 from src.services.study_agent_index import StudyDocumentIndexService
 from src.services.study_agent_runtime import StudyAgentRuntimeService
@@ -99,6 +101,95 @@ def _insert_persisted_chunk(
             )
         )
         session.commit()
+
+
+def _insert_persisted_chunk_with_concept(
+    Session,
+    *,
+    document_id: str = "doc-study",
+    owner_id: str = "user-1",
+    artifact_id: str | None = None,
+    content: str = "Persisted derivatives evidence.",
+    concept_id: str = "derivative",
+    chunk_index: int = 0,
+    chunk_count: int = 1,
+    source: str | None = None,
+) -> None:
+    artifact_id = artifact_id or f"artifact-{document_id}"
+    source = source or f"document:{document_id}:chunk:{chunk_index}"
+    with Session() as session:
+        session.add(
+            DocumentChunkRecord(
+                id=f"chunk-{owner_id}-{document_id}-{chunk_index}",
+                owner_id=owner_id,
+                document_id=document_id,
+                artifact_id=artifact_id,
+                chunk_index=chunk_index,
+                chunk_count=chunk_count,
+                source=source,
+                content=content,
+                chunk_metadata={
+                    "owner_id": owner_id,
+                    "document_id": document_id,
+                    "document_title": "Calculus Notes",
+                    "artifact_id": artifact_id,
+                    "artifact_type": "normalized_document",
+                    "chunk_index": chunk_index,
+                    "chunk_count": chunk_count,
+                    "source_kind": "persisted_document_chunk",
+                    "concept_id": concept_id,
+                },
+                content_hash=f"hash-{owner_id}-{document_id}-{chunk_index}",
+            )
+        )
+        session.commit()
+
+
+def _advanced_runtime(
+    Session,
+    *,
+    expert_config: ExpertCollaborationConfig | None = None,
+    expert_runner=None,
+) -> StudyAgentRuntimeService:
+    return StudyAgentRuntimeService(
+        session_factory=Session,
+        expert_config=expert_config or ExpertCollaborationConfig(enabled=True, max_branches=3),
+        expert_runner=expert_runner,
+        route_policy=RAGRoutePolicyService(
+            RAGRoutePolicyConfig(
+                advanced_routing_enabled=True,
+                graph_rag_enabled=True,
+                agentic_rag_enabled=True,
+                max_budget_for_agentic="balanced",
+            )
+        ),
+        readiness_provider=lambda: RAGReadinessSnapshot(
+            policy_version="rag-policy-v1",
+            fixture_version="test-fixture",
+            modes={
+                "agentic_rag": {
+                    "overall": "candidate",
+                    "by_category": {
+                        "multi_document_synthesis": "candidate",
+                        "question_generation": "candidate",
+                    },
+                },
+                "graph_rag_lite": {
+                    "overall": "candidate",
+                    "by_category": {
+                        "multi_document_synthesis": "candidate",
+                        "question_generation": "candidate",
+                    },
+                },
+            },
+        ),
+    )
+
+
+class _SlowExpertRunner:
+    async def run(self, **kwargs):
+        await asyncio.sleep(0.2)
+        raise AssertionError("runtime wait_for should time this runner out first")
 
 
 @pytest.mark.asyncio
@@ -455,6 +546,7 @@ async def test_runtime_attaches_completed_workflow_timeline():
         "intake",
         "plan",
         "skill_select",
+        "expert_gate",
         "retrieve",
         "generate",
         "verify",
@@ -469,9 +561,213 @@ async def test_runtime_attaches_completed_workflow_timeline():
         "skill_version": "v1",
         "review_gate_profile": "standard",
     }
-    assert workflow["stages"][3]["output_summary"]["chunk_count"] == 1
-    assert workflow["stages"][4]["output_summary"]["citation_count"] == 1
-    assert workflow["stages"][5]["output_summary"]["confidence"] >= 0
+    expert_stage = workflow["stages"][3]
+    assert expert_stage["output_summary"] == {
+        "expert_enabled": False,
+        "expert_branch_count": 0,
+        "expert_timeout_count": 0,
+        "expert_failure_count": 0,
+        "expert_fallback_reason": "expert_disabled",
+    }
+    assert workflow["stages"][4]["output_summary"]["chunk_count"] == 1
+    assert workflow["stages"][5]["output_summary"]["citation_count"] == 1
+    assert workflow["stages"][6]["output_summary"]["confidence"] >= 0
+    assert result.audit_metadata["expert"] == {
+        "enabled": False,
+        "branch_count": 0,
+        "timeout_count": 0,
+        "failure_count": 0,
+        "fallback_reason": "expert_disabled",
+    }
+
+
+@pytest.mark.asyncio
+async def test_runtime_runs_expert_branches_for_eligible_synthesis_request():
+    Session = _session_factory()
+    _insert_ready_document_with_artifact(
+        Session,
+        document_id="doc-study",
+        content="Derivative material should not be read when persisted chunks exist.",
+    )
+    _insert_ready_document_with_artifact(
+        Session,
+        document_id="doc-second",
+        content="Integral material should not be read when persisted chunks exist.",
+    )
+    _insert_persisted_chunk_with_concept(
+        Session,
+        document_id="doc-study",
+        content="Derivative links local change to rates.",
+        concept_id="derivative",
+    )
+    _insert_persisted_chunk_with_concept(
+        Session,
+        document_id="doc-second",
+        content="Integral links accumulation to total change.",
+        concept_id="integral",
+    )
+    runtime = _advanced_runtime(Session)
+
+    result = await runtime.run(
+        {
+            "query": "请跨章节整合第2章和第4章中 Derivative 与 Integral 的关系",
+            "target": "answer",
+            "document_ids": ["doc-study", "doc-second"],
+            "budget": "balanced",
+            "authenticated_user_id": "user-1",
+            "request_id": "req-expert-synthesis",
+        }
+    )
+
+    assert result.plan.mode == RetrievalMode.AGENTIC
+    assert result.audit_metadata["expert"] == {
+        "enabled": True,
+        "branch_count": 3,
+        "timeout_count": 0,
+        "failure_count": 0,
+        "branch_statuses": {
+            "retrieval_expert": "passed",
+            "graph_expert": "passed",
+            "synthesis_expert": "passed",
+        },
+    }
+    expert_stage = next(
+        stage for stage in result.audit_metadata["workflow"]["stages"] if stage["stage"] == "expert_gate"
+    )
+    assert expert_stage["output_summary"] == {
+        "expert_enabled": True,
+        "expert_branch_count": 3,
+        "expert_timeout_count": 0,
+        "expert_failure_count": 0,
+    }
+    serialized_expert = str(result.audit_metadata["expert"])
+    assert "第2章" not in serialized_expert
+    assert "Derivative links local change" not in serialized_expert
+
+
+@pytest.mark.asyncio
+async def test_runtime_skips_experts_for_non_eligible_category():
+    Session = _session_factory()
+    _insert_ready_document_with_artifact(Session)
+    _insert_persisted_chunk_with_concept(Session)
+    runtime = _advanced_runtime(Session)
+
+    result = await runtime.run(
+        {
+            "query": "What do derivatives measure?",
+            "target": "answer",
+            "document_ids": ["doc-study"],
+            "authenticated_user_id": "user-1",
+            "request_id": "req-expert-category-skip",
+        }
+    )
+
+    assert result.audit_metadata["expert"] == {
+        "enabled": False,
+        "branch_count": 0,
+        "timeout_count": 0,
+        "failure_count": 0,
+        "fallback_reason": "category_not_eligible",
+    }
+    expert_stage = next(
+        stage for stage in result.audit_metadata["workflow"]["stages"] if stage["stage"] == "expert_gate"
+    )
+    assert expert_stage["output_summary"]["expert_fallback_reason"] == "category_not_eligible"
+
+
+@pytest.mark.asyncio
+async def test_runtime_expert_metadata_excludes_cross_owner_chunk_content():
+    Session = _session_factory()
+    _insert_ready_document_with_artifact(Session)
+    _insert_persisted_chunk_with_concept(
+        Session,
+        content="Derivative owner-scoped evidence.",
+        concept_id="derivative",
+    )
+    _insert_persisted_chunk_with_concept(
+        Session,
+        owner_id="user-2",
+        document_id="doc-study",
+        content="CROSS OWNER SECRET CHUNK CONTENT",
+        concept_id="other-owner-secret",
+        chunk_index=1,
+        chunk_count=2,
+        source="document:doc-secret:chunk:0",
+    )
+    runtime = _advanced_runtime(Session)
+
+    result = await runtime.run(
+        {
+            "query": "请跨章节整合第2章和第4章中 Derivative 的内容",
+            "target": "answer",
+            "document_ids": ["doc-study"],
+            "budget": "balanced",
+            "authenticated_user_id": "user-1",
+            "request_id": "req-expert-owner-scope",
+        }
+    )
+
+    serialized_metadata = str(
+        {
+            "expert": result.audit_metadata["expert"],
+            "workflow": result.audit_metadata["workflow"],
+        }
+    )
+    assert "CROSS OWNER SECRET" not in serialized_metadata
+    assert "doc-secret" not in serialized_metadata
+    assert "other-owner-secret" not in serialized_metadata
+    assert "user-2" not in serialized_metadata
+
+
+@pytest.mark.asyncio
+async def test_runtime_expert_runner_timeout_falls_back_to_serial_answer():
+    Session = _session_factory()
+    _insert_ready_document_with_artifact(Session)
+    _insert_persisted_chunk_with_concept(
+        Session,
+        content="Derivative and integral evidence for a practice question.",
+        concept_id="derivative",
+    )
+    runtime = _advanced_runtime(
+        Session,
+        expert_config=ExpertCollaborationConfig(
+            enabled=True,
+            max_branches=3,
+            branch_timeout_seconds=0.01,
+        ),
+        expert_runner=_SlowExpertRunner(),
+    )
+
+    result = await runtime.run(
+        {
+            "query": "基于第2章和第4章出一道 Derivative 综合题",
+            "target": "question",
+            "document_ids": ["doc-study"],
+            "budget": "balanced",
+            "authenticated_user_id": "user-1",
+            "request_id": "req-expert-timeout",
+        }
+    )
+
+    assert result.draft.content
+    assert result.audit_metadata["expert"] == {
+        "enabled": True,
+        "branch_count": 1,
+        "timeout_count": 1,
+        "failure_count": 0,
+        "fallback_reason": "branch_timeout",
+        "branch_statuses": {"retrieval_expert": "timeout"},
+    }
+    expert_stage = next(
+        stage for stage in result.audit_metadata["workflow"]["stages"] if stage["stage"] == "expert_gate"
+    )
+    assert expert_stage["output_summary"] == {
+        "expert_enabled": True,
+        "expert_branch_count": 1,
+        "expert_timeout_count": 1,
+        "expert_failure_count": 0,
+        "expert_fallback_reason": "branch_timeout",
+    }
 
 
 @pytest.mark.asyncio

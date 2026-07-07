@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 from src.services.rag_route_policy import RAGRoutePolicyDecision
 from src.services.rag_router import RetrievalMode
+from src.services.rag_service import Chunk
 from src.services.study_agent_skills import StudySkill
 
 ExpertBranchName = Literal[
@@ -126,6 +127,120 @@ class ExpertBranchResult:
         return safe
 
 
+@dataclass(frozen=True)
+class ExpertExecutionSummary:
+    enabled: bool
+    branch_results: tuple[ExpertBranchResult, ...] = ()
+    fallback_reason: str | None = None
+
+    def to_safe_dict(self) -> dict[str, Any]:
+        safe_results = [result.to_safe_dict() for result in self.branch_results]
+        branch_statuses = {
+            result["branch_name"]: result["status"]
+            for result in safe_results
+            if result.get("branch_name") in SAFE_BRANCH_NAMES
+            and result.get("status") in SAFE_BRANCH_STATUSES
+        }
+        payload: dict[str, Any] = {
+            "enabled": self.enabled,
+            "branch_count": len(branch_statuses),
+            "timeout_count": sum(
+                1 for status in branch_statuses.values() if status == "timeout"
+            ),
+            "failure_count": sum(
+                1 for status in branch_statuses.values() if status == "failed"
+            ),
+        }
+        if self.fallback_reason in SAFE_REASON_CODES:
+            payload["fallback_reason"] = self.fallback_reason
+        if branch_statuses:
+            payload["branch_statuses"] = branch_statuses
+        return safe_expert_metadata(payload) or {
+            "enabled": self.enabled,
+            "branch_count": 0,
+            "timeout_count": 0,
+            "failure_count": 0,
+        }
+
+
+class DeterministicExpertBranchRunner:
+    async def run(
+        self,
+        *,
+        chunks: tuple[Chunk, ...],
+        category: str,
+        max_branches: int,
+        policy_decision: RAGRoutePolicyDecision | None = None,
+        skill: StudySkill | None = None,
+    ) -> ExpertExecutionSummary:
+        del policy_decision, skill
+        branch_names = [
+            "retrieval_expert",
+            "graph_expert",
+            (
+                "question_expert"
+                if category == "question_generation"
+                else "synthesis_expert"
+            ),
+        ][: max(0, min(4, int(max_branches)))]
+        source_ids = _unique_nonempty(chunk.source for chunk in chunks)
+        concept_ids = _unique_nonempty(
+            chunk.metadata.get("concept_id")
+            for chunk in chunks
+            if isinstance(chunk.metadata, dict)
+        )
+        confidence = _average_chunk_score(chunks)
+
+        results: list[ExpertBranchResult] = []
+        for branch_name in branch_names:
+            if branch_name == "retrieval_expert":
+                results.append(
+                    ExpertBranchResult(
+                        branch_name=branch_name,
+                        status="passed" if chunks else "skipped",
+                        source_ids=source_ids,
+                        confidence=confidence,
+                        metrics={
+                            "source_count": len(source_ids),
+                            "chunk_count": len(chunks),
+                        },
+                        safe_reason_code=None if chunks else "serial_fallback",
+                    )
+                )
+            elif branch_name == "graph_expert":
+                results.append(
+                    ExpertBranchResult(
+                        branch_name=branch_name,
+                        status="passed" if concept_ids else "skipped",
+                        concept_ids=concept_ids,
+                        confidence=confidence,
+                        metrics={
+                            "concept_count": len(concept_ids),
+                            "chunk_count": len(chunks),
+                        },
+                        safe_reason_code=None if concept_ids else "graph_unavailable",
+                    )
+                )
+            else:
+                results.append(
+                    ExpertBranchResult(
+                        branch_name=branch_name,
+                        status="passed" if chunks else "skipped",
+                        source_ids=source_ids,
+                        concept_ids=concept_ids,
+                        confidence=confidence,
+                        metrics={
+                            "source_count": len(source_ids),
+                            "chunk_count": len(chunks),
+                            "concept_count": len(concept_ids),
+                        },
+                        safe_reason_code=None if chunks else "serial_fallback",
+                    )
+                )
+
+        return ExpertExecutionSummary(enabled=True, branch_results=tuple(results))
+
+
 class ExpertEligibilityService:
     def __init__(self, config: ExpertCollaborationConfig | None = None) -> None:
         self.config = config or ExpertCollaborationConfig()
@@ -215,6 +330,28 @@ def _safe_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
         elif isinstance(value, float) and value >= 0:
             safe[key] = round(value, 6)
     return safe
+
+
+def _average_chunk_score(chunks: tuple[Chunk, ...] | list[Chunk]) -> float:
+    if not chunks:
+        return 0.0
+    scores: list[float] = []
+    for chunk in chunks:
+        value = getattr(chunk, "score", 0.0)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            scores.append(0.0)
+            continue
+        scores.append(max(0.0, min(1.0, float(value))))
+    return _safe_float(sum(scores) / len(scores))
+
+
+def _unique_nonempty(values) -> tuple[str, ...]:
+    seen: dict[str, None] = {}
+    for value in values:
+        normalized = str(value).strip()
+        if normalized:
+            seen.setdefault(normalized, None)
+    return tuple(seen)
 
 
 def _safe_source_id(value: Any) -> str | None:
