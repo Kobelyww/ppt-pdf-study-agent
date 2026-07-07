@@ -208,6 +208,71 @@ class SensitiveSkillStudyAgentOrchestrator:
 
 
 @dataclass
+class SensitiveExpertStudyAgentOrchestrator:
+    async def run(self, payload: dict) -> StudyAgentResult:
+        request = StudyRequest(query=payload["query"], target=StudyTarget.ANSWER)
+        evidence = EvidenceBundle(
+            mode=RetrievalMode.SIMPLE,
+            chunks=(Chunk(content="导数描述函数的变化率。", source="calculus:derivative"),),
+            sources=("calculus:derivative",),
+            concept_ids=("kp-derivative",),
+            confidence=0.8,
+            reason="simple token-overlap retrieval",
+        )
+        return StudyAgentResult(
+            request=request,
+            plan=StudyPlan(
+                mode=RetrievalMode.SIMPLE,
+                reason="definition or direct lookup query",
+                steps=("retrieve_chunks",),
+                estimated_cost="low",
+            ),
+            evidence=evidence,
+            draft=StudyDraft(
+                target=StudyTarget.ANSWER,
+                content="导数描述函数的变化率。",
+                citations=("calculus:derivative",),
+                used_chunk_count=1,
+            ),
+            verification=StudyVerification(
+                passed=True,
+                needs_review=False,
+                confidence=0.8,
+                issues=(),
+                source_recall=1.0,
+                answer_term_recall=1.0,
+            ),
+            audit_metadata={
+                "mode": "simple_rag",
+                "target": "answer",
+                "needs_review": False,
+                "source_count": 1,
+                "chunk_count": 1,
+                "expert": {
+                    "enabled": True,
+                    "branch_count": 3,
+                    "timeout_count": 1,
+                    "failure_count": 1,
+                    "fallback_reason": "branch_timeout",
+                    "branch_statuses": {
+                        "retrieval_expert": "passed",
+                        "graph_expert": "timeout",
+                        "question_expert": "failed",
+                        "raw_prompt_branch": "passed",
+                        "synthesis_expert": "contains raw answer",
+                    },
+                    "query": "raw expert diagnostic query",
+                    "generated_answer": "unsafe generated expert answer",
+                    "chunk_content": "unsafe expert chunk content",
+                    "source_snippet": "unsafe source snippet",
+                    "prompt": "hidden expert prompt",
+                    "token": "sk-expert-secret-token",
+                },
+            },
+        )
+
+
+@dataclass
 class WorkflowStudyAgentOrchestrator:
     workflow_id: str
     needs_review: bool = False
@@ -648,6 +713,65 @@ def test_study_agent_query_response_includes_safe_skill_payload():
         assert value not in serialized
     for key in ["generated_answer", "chunk_content", "prompt", "token"]:
         assert key not in serialized_skill
+
+
+def test_study_agent_query_response_includes_safe_expert_payload_only():
+    app = create_app(
+        secret_key="test-secret",
+        allow_dev_user_header=True,
+        study_agent_orchestrator=SensitiveExpertStudyAgentOrchestrator(),
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/study-agent/query",
+        json={"query": "什么是导数？"},
+        headers={"x-user-id": "user-1", "x-request-id": "req-study-sensitive-expert"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    expected_expert = {
+        "enabled": True,
+        "branch_count": 3,
+        "timeout_count": 1,
+        "failure_count": 1,
+        "fallback_reason": "branch_timeout",
+        "branch_statuses": {
+            "retrieval_expert": "passed",
+            "graph_expert": "timeout",
+            "question_expert": "failed",
+        },
+    }
+    assert "audit_metadata" not in payload
+    assert payload["expert"] == expected_expert
+    assert payload["trace"]["expert"] == expected_expert
+
+    serialized = response.text
+    serialized_expert_payloads = json.dumps(
+        {"expert": payload["expert"], "trace_expert": payload["trace"]["expert"]},
+        ensure_ascii=False,
+    )
+    for value in [
+        "raw expert diagnostic query",
+        "unsafe generated expert answer",
+        "unsafe expert chunk content",
+        "unsafe source snippet",
+        "hidden expert prompt",
+        "sk-expert-secret-token",
+        "raw_prompt_branch",
+        "contains raw answer",
+    ]:
+        assert value not in serialized
+    for key in [
+        "query",
+        "generated_answer",
+        "chunk_content",
+        "source_snippet",
+        "prompt",
+        "token",
+    ]:
+        assert key not in serialized_expert_payloads
 
 
 def test_study_agent_query_unsupported_skill_version_maps_to_422(tmp_path: Path):

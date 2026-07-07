@@ -407,6 +407,81 @@ def test_trace_persists_and_returns_safe_skill_metadata():
         assert key not in serialized_record
 
 
+def test_record_success_persists_safe_expert_metadata():
+    SessionFactory = _session_factory()
+    service = StudyAgentTraceService(SessionFactory)
+    result = _study_result()
+    result.audit_metadata["expert"] = {
+        "enabled": True,
+        "branch_count": 3,
+        "timeout_count": 1,
+        "failure_count": 1,
+        "fallback_reason": "branch_timeout",
+        "branch_statuses": {
+            "retrieval_expert": "passed",
+            "graph_expert": "timeout",
+            "question_expert": "failed",
+            "raw_prompt_branch": "passed",
+            "synthesis_expert": "contains raw answer",
+        },
+        "query": "raw expert diagnostic query",
+        "generated_answer": "unsafe generated expert answer",
+        "chunk_content": "unsafe expert chunk content",
+        "source_snippet": "unsafe source snippet",
+        "prompt": "hidden expert prompt",
+        "token": "sk-expert-secret-token",
+    }
+
+    payload = service.record_success(
+        owner_id="owner-1",
+        request_id="req-expert",
+        result=result,
+        latency_ms=21.0,
+        index_statuses={},
+    )
+    trace = service.get_trace("owner-1", payload["trace_id"])
+
+    expected_expert = {
+        "enabled": True,
+        "branch_count": 3,
+        "timeout_count": 1,
+        "failure_count": 1,
+        "fallback_reason": "branch_timeout",
+        "branch_statuses": {
+            "retrieval_expert": "passed",
+            "graph_expert": "timeout",
+            "question_expert": "failed",
+        },
+    }
+    assert payload["expert"] == expected_expert
+    assert trace is not None
+    assert trace["expert"] == expected_expert
+
+    with SessionFactory() as session:
+        record = session.scalar(select(StudyAgentTraceRecord))
+    serialized_record = json.dumps(record.trace_metadata, ensure_ascii=False, sort_keys=True)
+    for value in [
+        "raw expert diagnostic query",
+        "unsafe generated expert answer",
+        "unsafe expert chunk content",
+        "unsafe source snippet",
+        "hidden expert prompt",
+        "sk-expert-secret-token",
+        "raw_prompt_branch",
+        "contains raw answer",
+    ]:
+        assert value not in serialized_record
+    for key in [
+        '"query"',
+        '"generated_answer"',
+        '"chunk_content"',
+        '"source_snippet"',
+        '"prompt"',
+        '"token"',
+    ]:
+        assert key not in serialized_record.lower()
+
+
 def test_skill_sanitizer_drops_raw_or_unknown_skill_payload_fields():
     assert safe_skill_metadata(
         {

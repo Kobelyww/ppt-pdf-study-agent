@@ -18,6 +18,7 @@ from src.services.study_agent_runtime import StudyAgentRuntimeService
 from src.services.study_agent_skills import StudySkillRegistry
 from src.services.study_agent_trace import (
     StudyAgentTraceService,
+    safe_expert_metadata,
     safe_policy_metadata,
     safe_skill_metadata,
 )
@@ -93,6 +94,9 @@ async def query_study_agent(
     skill = safe_skill_metadata(audit_metadata.get("skill"))
     if skill is not None:
         response_payload["skill"] = skill
+    expert = safe_expert_metadata(audit_metadata.get("expert"))
+    if expert is not None:
+        response_payload["expert"] = expert
     workflow = sanitize_workflow_payload(audit_metadata.get("workflow"))
     if workflow is not None:
         response_payload["workflow"] = workflow
@@ -294,6 +298,9 @@ def _trace_payload_without_persistence(
     skill = safe_skill_metadata(audit_metadata.get("skill"))
     if skill is not None:
         trace_payload["skill"] = skill
+    expert = safe_expert_metadata(audit_metadata.get("expert"))
+    if expert is not None:
+        trace_payload["expert"] = expert
     workflow = sanitize_workflow_payload(audit_metadata.get("workflow"))
     if workflow is not None:
         trace_payload["workflow"] = workflow
